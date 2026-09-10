@@ -14,6 +14,17 @@ class DatabaseSettings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
 
+class MongoSettings(BaseSettings):
+    mongodb_uri: str = Field(validation_alias="MONGODB_URI")
+
+    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+
+
 @lru_cache
 def get_database_settings() -> DatabaseSettings:
     return DatabaseSettings()
+
+
+@lru_cache
+def get_mongo_settings() -> MongoSettings:
+    return MongoSettings()

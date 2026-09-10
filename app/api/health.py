@@ -5,6 +5,7 @@ from pydantic import BaseModel
 from sqlalchemy import text
 from sqlmodel import Session
 
+from app.db.mongo import get_mongo_database
 from app.db.session import get_engine
 
 
@@ -34,17 +35,33 @@ def check_postgresql() -> ComponentHealth:
     return ComponentHealth(status="UP")
 
 
+async def check_mongodb() -> ComponentHealth:
+    await get_mongo_database().command("ping")
+
+    return ComponentHealth(status="UP")
+
+
 @router.get("/", response_model=RootResponse)
 def read_root() -> RootResponse:
     return RootResponse(service="online-study-platform-ai", status="UP")
 
 
 @router.get("/health", response_model=HealthResponse)
-def read_health(response: Response) -> HealthResponse:
+async def read_health(response: Response) -> HealthResponse:
     try:
         postgresql = check_postgresql()
     except Exception:
-        response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
         postgresql = ComponentHealth(status="DOWN")
 
-    return HealthResponse(status=postgresql.status, components={"postgresql": postgresql})
+    try:
+        mongodb = await check_mongodb()
+    except Exception:
+        mongodb = ComponentHealth(status="DOWN")
+
+    components = {"postgresql": postgresql, "mongodb": mongodb}
+    service_status: ComponentStatus = "UP"
+    if any(component.status == "DOWN" for component in components.values()):
+        response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
+        service_status = "DOWN"
+
+    return HealthResponse(status=service_status, components=components)

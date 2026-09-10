@@ -46,6 +46,39 @@ class SettingsTests(unittest.TestCase):
                 os.environ.update(original_env)
                 sys.modules.pop("app.core.config", None)
 
+    def test_mongo_settings_load_from_env_file(self) -> None:
+        project_root = Path(__file__).resolve().parents[1]
+        original_cwd = Path.cwd()
+        original_sys_path = list(sys.path)
+        original_env = os.environ.copy()
+
+        with TemporaryDirectory() as temp_dir:
+            try:
+                Path(temp_dir, ".env").write_text(
+                    "MONGODB_URI=mongodb://root:secret@127.0.0.1:27017/kltn?authSource=admin\n",
+                    encoding="utf-8",
+                )
+
+                os.environ.pop("MONGODB_URI", None)
+
+                os.chdir(temp_dir)
+                sys.path.insert(0, str(project_root))
+                sys.modules.pop("app.core.config", None)
+
+                config = importlib.import_module("app.core.config")
+                settings = config.get_mongo_settings()
+
+                self.assertEqual(
+                    settings.mongodb_uri,
+                    "mongodb://root:secret@127.0.0.1:27017/kltn?authSource=admin",
+                )
+            finally:
+                os.chdir(original_cwd)
+                sys.path[:] = original_sys_path
+                os.environ.clear()
+                os.environ.update(original_env)
+                sys.modules.pop("app.core.config", None)
+
 
 if __name__ == "__main__":
     unittest.main()

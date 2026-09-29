@@ -3,10 +3,21 @@ from unittest.mock import AsyncMock, patch
 
 from fastapi.testclient import TestClient
 
+from app.core.config import AiSettings, get_ai_settings
 from app.main import app
 
 
 class ChatTests(unittest.TestCase):
+    def setUp(self) -> None:
+        app.dependency_overrides[get_ai_settings] = lambda: AiSettings(
+            AI_TOKEN=None,
+            LLM_PROVIDER="local",
+            GEMINI_API_KEY=None,
+        )
+
+    def tearDown(self) -> None:
+        app.dependency_overrides.clear()
+
     def test_chat_returns_grounded_answer_with_citation(self) -> None:
         response = TestClient(app).post(
             "/chat",

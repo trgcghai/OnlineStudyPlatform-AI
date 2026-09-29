@@ -1,5 +1,32 @@
+# Local secrets. Keep the documented template versioned.
 .env
+.env.*
+!.env.example
 
+# Python bytecode and test/tool caches.
 __pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+.coverage.*
+htmlcov/
 
+# Local Python environments.
 .venv/
+venv/
+
+# Hugging Face / faster-whisper downloaded models and locks.
+.cache/
+.locks/
+models--*/
+CACHEDIR.TAG
+
+# Local logs, IDE settings, and operating-system metadata.
+*.log
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db

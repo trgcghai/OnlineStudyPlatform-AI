@@ -24,9 +24,7 @@ from app.services.knowledge_documents import (
 
 class KnowledgeApiTests(unittest.TestCase):
     def setUp(self) -> None:
-        app.dependency_overrides[get_ai_settings] = lambda: AiSettings(
-            AI_TOKEN=None
-        )
+        app.dependency_overrides[get_ai_settings] = lambda: AiSettings(AI_TOKEN=None)
 
     def tearDown(self) -> None:
         app.dependency_overrides.clear()
@@ -70,9 +68,7 @@ class KnowledgeApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 422)
 
     def test_delete_source_calls_vector_store(self) -> None:
-        with patch(
-            "app.api.knowledge.delete_source", new_callable=AsyncMock
-        ) as delete:
+        with patch("app.api.knowledge.delete_source", new_callable=AsyncMock) as delete:
             response = TestClient(app).delete("/knowledge/sources/source-1")
 
         self.assertEqual(response.status_code, 200)
@@ -114,9 +110,7 @@ class KnowledgeDocumentTests(unittest.TestCase):
                 SimpleNamespace(extract_text=lambda: "Trang hai"),
             ],
         )
-        with patch(
-            "app.services.knowledge_documents.PdfReader", return_value=reader
-        ):
+        with patch("app.services.knowledge_documents.PdfReader", return_value=reader):
             parts = extract_pdf("lesson.pdf")
 
         self.assertEqual([part.locator for part in parts], ["Trang 1", "Trang 2"])

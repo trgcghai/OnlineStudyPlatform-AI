@@ -12,6 +12,7 @@ from app.services.vector_store import search_course
 
 router = APIRouter(prefix="/chat", tags=["chat"])
 
+
 class ChatMessage(BaseModel):
     role: Literal["user", "assistant"]
     content: str

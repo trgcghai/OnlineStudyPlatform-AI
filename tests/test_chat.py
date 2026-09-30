@@ -8,14 +8,17 @@ from app.main import app
 from app.services.vector_store import VectorSearchResult
 
 
-def match(score: float = 0.82) -> VectorSearchResult:
+def match(
+    score: float = 0.82,
+    text: str = "Dependency injection giúp quản lý provider và service trong module.",
+) -> VectorSearchResult:
     return VectorSearchResult(
         score=score,
         lesson_id="lesson-1",
         lesson_title="Dependency Injection",
         source_type="material",
         locator="Trang 3",
-        text="Dependency injection giúp quản lý provider và service trong module.",
+        text=text,
     )
 
 
@@ -78,6 +81,29 @@ class ChatTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertIn("Dependency injection", search.await_args.args[2])
         self.assertIn("Nó dùng để làm gì", search.await_args.args[2])
+
+    def test_chat_keeps_distinct_chunks_with_the_same_source_locator(self) -> None:
+        with patch(
+            "app.api.chat.search_course",
+            new_callable=AsyncMock,
+            return_value=[
+                match(text="Đoạn transcript nói về provider."),
+                match(text="Đoạn transcript nói về service."),
+            ],
+        ):
+            response = TestClient(app).post(
+                "/chat",
+                json={
+                    "learnerId": "learner-1",
+                    "courseId": "course-1",
+                    "question": "Provider và service liên quan thế nào?",
+                    "similarityThreshold": 0.2,
+                    "history": [],
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(len(response.json()["citations"]), 2)
 
     def test_chat_refuses_without_relevant_vectors_and_skips_gemini(self) -> None:
         with (

@@ -37,6 +37,23 @@ class AiSettings(BaseSettings):
     transcribe_max_bytes: int = Field(default=1_073_741_824, ge=1, validation_alias="TRANSCRIBE_MAX_BYTES")
     transcribe_download_timeout_seconds: float = Field(default=60, gt=0, validation_alias="TRANSCRIBE_DOWNLOAD_TIMEOUT_SECONDS")
     transcribe_allowed_hosts: str = Field(default="minio,localhost,127.0.0.1", validation_alias="TRANSCRIBE_ALLOWED_HOSTS")
+    qdrant_url: str = Field(default="http://localhost:6333", validation_alias="QDRANT_URL")
+    qdrant_collection: str = Field(default="lesson_knowledge", validation_alias="QDRANT_COLLECTION")
+    embedding_model: str = Field(
+        default="sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
+        validation_alias="EMBEDDING_MODEL",
+    )
+    embedding_cache_dir: str = Field(
+        default="/var/cache/embeddings", validation_alias="EMBEDDING_CACHE_DIR"
+    )
+    rag_top_k: int = Field(default=5, ge=1, le=20, validation_alias="RAG_TOP_K")
+    knowledge_chunk_size: int = Field(default=1200, ge=300, le=4000, validation_alias="KNOWLEDGE_CHUNK_SIZE")
+    knowledge_chunk_overlap: int = Field(default=200, ge=0, le=1000, validation_alias="KNOWLEDGE_CHUNK_OVERLAP")
+    knowledge_max_bytes: int = Field(default=26_214_400, ge=1, validation_alias="KNOWLEDGE_MAX_BYTES")
+    knowledge_max_characters: int = Field(default=2_000_000, ge=1000, validation_alias="KNOWLEDGE_MAX_CHARACTERS")
+    knowledge_max_archive_bytes: int = Field(default=209_715_200, ge=1, validation_alias="KNOWLEDGE_MAX_ARCHIVE_BYTES")
+    knowledge_download_timeout_seconds: float = Field(default=60, gt=0, validation_alias="KNOWLEDGE_DOWNLOAD_TIMEOUT_SECONDS")
+    knowledge_allowed_hosts: str = Field(default="minio,localhost,127.0.0.1", validation_alias="KNOWLEDGE_ALLOWED_HOSTS")
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
@@ -45,6 +62,14 @@ class AiSettings(BaseSettings):
         return {
             host.strip().casefold()
             for host in self.transcribe_allowed_hosts.split(",")
+            if host.strip()
+        }
+
+    @property
+    def knowledge_allowed_host_set(self) -> set[str]:
+        return {
+            host.strip().casefold()
+            for host in self.knowledge_allowed_hosts.split(",")
             if host.strip()
         }
 

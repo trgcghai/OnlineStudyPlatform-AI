@@ -6,16 +6,11 @@ from pydantic import BaseModel, Field
 from app.api.dependencies import verify_token
 from app.core.config import AiSettings, get_ai_settings
 from app.services.llm import generate_gemini_answer
-from app.services.rag import answer_with_rag
+from app.services.rag import answer_with_rag, build_query
+from app.services.vector_store import search_course
 
 
 router = APIRouter(prefix="/chat", tags=["chat"])
-
-class ChatSource(BaseModel):
-    lesson_id: str | None = Field(default=None, alias="lessonId")
-    lesson_title: str = Field(alias="lessonTitle")
-    content: str
-
 
 class ChatMessage(BaseModel):
     role: Literal["user", "assistant"]
@@ -28,13 +23,14 @@ class ChatRequest(BaseModel):
     question: str = Field(min_length=1, max_length=1000)
     similarity_threshold: float = Field(alias="similarityThreshold", ge=0, le=1)
     history: list[ChatMessage] = Field(default_factory=list)
-    sources: list[ChatSource]
 
 
 class ChatCitation(BaseModel):
     lesson_id: str | None = Field(default=None, alias="lessonId")
     lesson_title: str = Field(alias="lessonTitle")
     excerpt: str
+    source_type: Literal["transcript", "material"] = Field(alias="sourceType")
+    locator: str | None = None
 
 
 class ChatResponse(BaseModel):
@@ -49,11 +45,17 @@ async def chat(
     request: ChatRequest,
     settings: AiSettings = Depends(get_ai_settings),
 ) -> ChatResponse:
+    matches = await search_course(
+        settings,
+        request.course_id,
+        build_query(request.question, request.history),
+        request.similarity_threshold,
+    )
     result = answer_with_rag(
         question=request.question,
         similarity_threshold=request.similarity_threshold,
         history=request.history,
-        sources=request.sources,
+        matches=matches,
     )
     answer = result.answer
 
@@ -75,6 +77,8 @@ async def chat(
                 lessonId=citation.lesson_id,
                 lessonTitle=citation.lesson_title,
                 excerpt=citation.excerpt,
+                sourceType=citation.source_type,
+                locator=citation.locator,
             )
             for citation in result.citations
         ],

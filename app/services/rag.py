@@ -59,9 +59,15 @@ def build_query(question: str, history: list[RagHistoryMessage]) -> str:
 
 def build_citations(matches: list[RagSearchMatch]) -> list[RagCitation]:
     citations: list[RagCitation] = []
-    seen: set[tuple[str, str, str | None]] = set()
+    seen: set[tuple[str, str, str | None, str]] = set()
     for match in matches:
-        key = (match.lesson_id, match.source_type, match.locator)
+        match_excerpt = excerpt(match.text)
+        key = (
+            match.lesson_id,
+            match.source_type,
+            match.locator,
+            match_excerpt,
+        )
         if key in seen:
             continue
         seen.add(key)
@@ -69,7 +75,7 @@ def build_citations(matches: list[RagSearchMatch]) -> list[RagCitation]:
             RagCitation(
                 lesson_id=match.lesson_id,
                 lesson_title=match.lesson_title,
-                excerpt=excerpt(match.text),
+                excerpt=match_excerpt,
                 source_type=match.source_type,
                 locator=match.locator,
             )

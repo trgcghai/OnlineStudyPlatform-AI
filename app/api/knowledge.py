@@ -1,5 +1,5 @@
 import asyncio
-from typing import Literal
+from typing import Literal, Self
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field, model_validator
@@ -33,7 +33,7 @@ class KnowledgeIndexRequest(BaseModel):
     transcript: str | None = None
 
     @model_validator(mode="after")
-    def validate_source(self):
+    def validate_source(self) -> Self:
         if self.source_type == "material" and not self.source_url:
             raise ValueError("sourceUrl is required for material")
         if self.source_type == "transcript" and not self.transcript:

@@ -103,7 +103,10 @@ class VectorKnowledgeStore:
             lesson_id = payload.get("lessonId")
             lesson_title = payload.get("lessonTitle")
             source_type = payload.get("sourceType")
-            if not all(isinstance(value, str) for value in [text, lesson_id, lesson_title, source_type]):
+            if not all(
+                isinstance(value, str)
+                for value in [text, lesson_id, lesson_title, source_type]
+            ):
                 continue
             locator = payload.get("locator")
             results.append(

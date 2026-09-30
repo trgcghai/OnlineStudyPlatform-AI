@@ -5,6 +5,7 @@ import urllib.request
 import zipfile
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from docx import Document
 from pptx import Presentation
@@ -27,7 +28,15 @@ class SafeDocumentRedirectHandler(urllib.request.HTTPRedirectHandler):
         super().__init__()
         self.allowed_hosts = allowed_hosts
 
-    def redirect_request(self, req, fp, code, msg, headers, newurl):
+    def redirect_request(
+        self,
+        req: urllib.request.Request,
+        fp: Any,
+        code: int,
+        msg: str,
+        headers: Any,
+        newurl: str,
+    ) -> urllib.request.Request | None:
         validate_document_url(newurl, self.allowed_hosts)
         return super().redirect_request(req, fp, code, msg, headers, newurl)
 
@@ -75,7 +84,9 @@ def download_document(url: str, settings: AiSettings) -> str:
         with opener.open(
             request, timeout=settings.knowledge_download_timeout_seconds
         ) as response:
-            validate_document_url(response.geturl(), settings.knowledge_allowed_host_set)
+            validate_document_url(
+                response.geturl(), settings.knowledge_allowed_host_set
+            )
             with open(temporary_path, "wb") as destination:
                 while True:
                     block = response.read(DOWNLOAD_CHUNK_BYTES)
@@ -103,7 +114,9 @@ def validate_office_archive(path: str, settings: AiSettings) -> None:
             if total > settings.knowledge_max_archive_bytes:
                 raise KnowledgeDocumentError("Office archive expands beyond the limit")
             if any(member.flag_bits & 0x1 for member in members):
-                raise KnowledgeDocumentError("Encrypted Office documents are not supported")
+                raise KnowledgeDocumentError(
+                    "Encrypted Office documents are not supported"
+                )
     except zipfile.BadZipFile as error:
         raise KnowledgeDocumentError("Office document is corrupt") from error
 

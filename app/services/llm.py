@@ -63,9 +63,7 @@ def call_gemini(
         return None
 
     model = urllib.parse.quote(settings.gemini_model, safe="")
-    url = (
-        f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
-    )
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
     body = json.dumps(
         {
             "contents": [

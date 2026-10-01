@@ -10,10 +10,20 @@ requires-python = ">=3.13"
 dependencies = [
     "fastapi[standard]>=0.141.1",
     "motor>=3.7.1",
+    "llvmlite>=0.46.0",
+    "numba>=0.63.0",
+    "numpy>=2.0.0",
     "psycopg[binary]>=3.3.5",
     "pydantic-settings>=2.15.0",
+    "pytest>=9.0.0",
+    "scikit-learn>=1.5.0",
+    "shap>=0.46.0",
     "sqlmodel>=0.0.42",
+    "xgboost>=2.1.0",
 ]
 
 [tool.uv]
 package = false
+
+[tool.pytest.ini_options]
+pythonpath = ["."]

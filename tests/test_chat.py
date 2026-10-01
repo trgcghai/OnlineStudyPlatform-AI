@@ -5,6 +5,21 @@ from fastapi.testclient import TestClient
 
 from app.core.config import AiSettings, get_ai_settings
 from app.main import app
+from app.services.vector_store import VectorSearchResult
+
+
+def match(
+    score: float = 0.82,
+    text: str = "Dependency injection giúp quản lý provider và service trong module.",
+) -> VectorSearchResult:
+    return VectorSearchResult(
+        score=score,
+        lesson_id="lesson-1",
+        lesson_title="Dependency Injection",
+        source_type="material",
+        locator="Trang 3",
+        text=text,
+    )
 
 
 class ChatTests(unittest.TestCase):
@@ -18,252 +33,133 @@ class ChatTests(unittest.TestCase):
     def tearDown(self) -> None:
         app.dependency_overrides.clear()
 
-    def test_chat_returns_grounded_answer_with_citation(self) -> None:
-        response = TestClient(app).post(
-            "/chat",
-            json={
-                "learnerId": "learner-1",
-                "courseId": "course-1",
-                "question": "NestJS dependency injection la gi?",
-                "similarityThreshold": 0.1,
-                "history": [],
-                "sources": [
-                    {
-                        "lessonId": "lesson-1",
-                        "lessonTitle": "Dependency Injection",
-                        "content": "NestJS dependency injection giup quan ly provider va service trong module.",
-                    }
-                ],
-            },
-        )
+    def test_chat_searches_only_the_requested_course_and_returns_citation(self) -> None:
+        with patch(
+            "app.api.chat.search_course",
+            new_callable=AsyncMock,
+            return_value=[match()],
+        ) as search:
+            response = TestClient(app).post(
+                "/chat",
+                json={
+                    "learnerId": "learner-1",
+                    "courseId": "course-1",
+                    "question": "Dependency injection là gì?",
+                    "similarityThreshold": 0.2,
+                    "history": [],
+                },
+            )
 
         self.assertEqual(response.status_code, 200)
         body = response.json()
         self.assertTrue(body["inScope"])
         self.assertEqual(body["citations"][0]["lessonId"], "lesson-1")
+        self.assertEqual(body["citations"][0]["sourceType"], "material")
+        self.assertEqual(body["citations"][0]["locator"], "Trang 3")
+        self.assertEqual(search.await_args.args[1], "course-1")
 
-    def test_chat_refuses_low_similarity_question(self) -> None:
-        response = TestClient(app).post(
-            "/chat",
-            json={
-                "learnerId": "learner-1",
-                "courseId": "course-1",
-                "question": "Thoi tiet hom nay the nao?",
-                "similarityThreshold": 0.8,
-                "history": [],
-                "sources": [
-                    {
-                        "lessonId": "lesson-1",
-                        "lessonTitle": "Dependency Injection",
-                        "content": "NestJS dependency injection giup quan ly provider va service trong module.",
-                    }
-                ],
-            },
-        )
-
-        self.assertEqual(response.status_code, 200)
-        body = response.json()
-        self.assertFalse(body["inScope"])
-        self.assertIn("ngoai noi dung kien thuc cua khoa hoc", body["answer"])
-
-    def test_chat_retrieves_matching_chunk_from_long_lesson(self) -> None:
-        unrelated_intro = " ".join(["mo dau tong quan khoa hoc"] * 120)
-        target_content = (
-            "Guard trong NestJS kiem tra request truoc khi vao controller "
-            "va thuong dung de xac thuc phan quyen."
-        )
-        response = TestClient(app).post(
-            "/chat",
-            json={
-                "learnerId": "learner-1",
-                "courseId": "course-1",
-                "question": "Guard trong NestJS dung de lam gi?",
-                "similarityThreshold": 0.05,
-                "history": [],
-                "sources": [
-                    {
-                        "lessonId": "lesson-guard",
-                        "lessonTitle": "Guard",
-                        "content": f"{unrelated_intro} {target_content}",
-                    }
-                ],
-            },
-        )
-
-        self.assertEqual(response.status_code, 200)
-        body = response.json()
-        self.assertTrue(body["inScope"])
-        self.assertEqual(body["citations"][0]["lessonId"], "lesson-guard")
-        self.assertIn("Guard trong NestJS", body["citations"][0]["excerpt"])
-
-    def test_chat_returns_multiple_ranked_citations(self) -> None:
-        response = TestClient(app).post(
-            "/chat",
-            json={
-                "learnerId": "learner-1",
-                "courseId": "course-1",
-                "question": "module provider service trong NestJS lien quan the nao?",
-                "similarityThreshold": 0.05,
-                "history": [],
-                "sources": [
-                    {
-                        "lessonId": "lesson-module",
-                        "lessonTitle": "Module",
-                        "content": "NestJS module gom provider va controller de to chuc service.",
-                    },
-                    {
-                        "lessonId": "lesson-provider",
-                        "lessonTitle": "Provider",
-                        "content": "Provider trong NestJS thuong la service duoc inject vao module.",
-                    },
-                ],
-            },
-        )
-
-        self.assertEqual(response.status_code, 200)
-        body = response.json()
-        self.assertTrue(body["inScope"])
-        self.assertGreaterEqual(len(body["citations"]), 2)
-
-    def test_chat_uses_history_for_follow_up_question(self) -> None:
-        response = TestClient(app).post(
-            "/chat",
-            json={
-                "learnerId": "learner-1",
-                "courseId": "course-1",
-                "question": "no dung de lam gi?",
-                "similarityThreshold": 0.05,
-                "history": [
-                    {
-                        "role": "user",
-                        "content": "Hay giai thich dependency injection trong NestJS",
-                    },
-                    {
-                        "role": "assistant",
-                        "content": "Dependency injection giup quan ly provider.",
-                    },
-                ],
-                "sources": [
-                    {
-                        "lessonId": "lesson-di",
-                        "lessonTitle": "Dependency Injection",
-                        "content": "Dependency injection trong NestJS giup quan ly provider va service.",
-                    }
-                ],
-            },
-        )
-
-        self.assertEqual(response.status_code, 200)
-        body = response.json()
-        self.assertTrue(body["inScope"])
-        self.assertIn("ngu canh trao doi truoc", body["answer"])
-
-    def test_chat_refuses_when_sources_are_empty(self) -> None:
-        response = TestClient(app).post(
-            "/chat",
-            json={
-                "learnerId": "learner-1",
-                "courseId": "course-1",
-                "question": "Dependency injection la gi?",
-                "similarityThreshold": 0.05,
-                "history": [],
-                "sources": [],
-            },
-        )
-
-        self.assertEqual(response.status_code, 200)
-        body = response.json()
-        self.assertFalse(body["inScope"])
-        self.assertEqual(body["citations"], [])
-
-    def test_chat_uses_gemini_answer_when_available(self) -> None:
+    def test_chat_uses_recent_user_history_in_vector_query(self) -> None:
         with patch(
-            "app.api.chat.generate_gemini_answer",
+            "app.api.chat.search_course",
             new_callable=AsyncMock,
-        ) as generate_answer:
-            generate_answer.return_value = "Gemini: Dependency injection giup inject service vao provider."
+            return_value=[match()],
+        ) as search:
             response = TestClient(app).post(
                 "/chat",
                 json={
                     "learnerId": "learner-1",
                     "courseId": "course-1",
-                    "question": "Dependency injection la gi?",
-                    "similarityThreshold": 0.05,
-                    "history": [],
-                    "sources": [
-                        {
-                            "lessonId": "lesson-di",
-                            "lessonTitle": "Dependency Injection",
-                            "content": "Dependency injection trong NestJS giup quan ly provider va service.",
-                        }
+                    "question": "Nó dùng để làm gì?",
+                    "similarityThreshold": 0.2,
+                    "history": [
+                        {"role": "user", "content": "Dependency injection là gì?"},
+                        {"role": "assistant", "content": "Đây là một cơ chế."},
                     ],
                 },
             )
 
         self.assertEqual(response.status_code, 200)
-        body = response.json()
-        self.assertEqual(
-            body["answer"],
-            "Gemini: Dependency injection giup inject service vao provider.",
-        )
-        generate_answer.assert_awaited_once()
+        self.assertIn("Dependency injection", search.await_args.args[2])
+        self.assertIn("Nó dùng để làm gì", search.await_args.args[2])
 
-    def test_chat_does_not_call_gemini_when_question_is_out_of_scope(self) -> None:
+    def test_chat_keeps_distinct_chunks_with_the_same_source_locator(self) -> None:
         with patch(
-            "app.api.chat.generate_gemini_answer",
+            "app.api.chat.search_course",
             new_callable=AsyncMock,
-        ) as generate_answer:
+            return_value=[
+                match(text="Đoạn transcript nói về provider."),
+                match(text="Đoạn transcript nói về service."),
+            ],
+        ):
             response = TestClient(app).post(
                 "/chat",
                 json={
                     "learnerId": "learner-1",
                     "courseId": "course-1",
-                    "question": "Thoi tiet hom nay the nao?",
-                    "similarityThreshold": 0.8,
+                    "question": "Provider và service liên quan thế nào?",
+                    "similarityThreshold": 0.2,
                     "history": [],
-                    "sources": [
-                        {
-                            "lessonId": "lesson-di",
-                            "lessonTitle": "Dependency Injection",
-                            "content": "Dependency injection trong NestJS giup quan ly provider va service.",
-                        }
-                    ],
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(len(response.json()["citations"]), 2)
+
+    def test_chat_refuses_without_relevant_vectors_and_skips_gemini(self) -> None:
+        with (
+            patch(
+                "app.api.chat.search_course",
+                new_callable=AsyncMock,
+                return_value=[],
+            ),
+            patch(
+                "app.api.chat.generate_gemini_answer",
+                new_callable=AsyncMock,
+            ) as generate,
+        ):
+            response = TestClient(app).post(
+                "/chat",
+                json={
+                    "learnerId": "learner-1",
+                    "courseId": "course-1",
+                    "question": "Thời tiết hôm nay thế nào?",
+                    "similarityThreshold": 0.5,
+                    "history": [],
                 },
             )
 
         self.assertEqual(response.status_code, 200)
         self.assertFalse(response.json()["inScope"])
-        generate_answer.assert_not_awaited()
+        self.assertIn("ngoài nội dung", response.json()["answer"])
+        generate.assert_not_awaited()
 
-    def test_chat_falls_back_to_rag_answer_when_gemini_returns_none(self) -> None:
-        with patch(
-            "app.api.chat.generate_gemini_answer",
-            new_callable=AsyncMock,
-        ) as generate_answer:
-            generate_answer.return_value = None
+    def test_chat_uses_gemini_for_a_grounded_answer(self) -> None:
+        with (
+            patch(
+                "app.api.chat.search_course",
+                new_callable=AsyncMock,
+                return_value=[match()],
+            ),
+            patch(
+                "app.api.chat.generate_gemini_answer",
+                new_callable=AsyncMock,
+                return_value="Câu trả lời tự nhiên từ Gemini.",
+            ) as generate,
+        ):
             response = TestClient(app).post(
                 "/chat",
                 json={
                     "learnerId": "learner-1",
                     "courseId": "course-1",
-                    "question": "Dependency injection la gi?",
-                    "similarityThreshold": 0.05,
+                    "question": "Dependency injection là gì?",
+                    "similarityThreshold": 0.2,
                     "history": [],
-                    "sources": [
-                        {
-                            "lessonId": "lesson-di",
-                            "lessonTitle": "Dependency Injection",
-                            "content": "Dependency injection trong NestJS giup quan ly provider va service.",
-                        }
-                    ],
                 },
             )
 
         self.assertEqual(response.status_code, 200)
-        body = response.json()
-        self.assertTrue(body["inScope"])
-        self.assertIn("Dua tren tai lieu khoa hoc", body["answer"])
-        generate_answer.assert_awaited_once()
+        self.assertEqual(response.json()["answer"], "Câu trả lời tự nhiên từ Gemini.")
+        generate.assert_awaited_once()
 
 
 if __name__ == "__main__":

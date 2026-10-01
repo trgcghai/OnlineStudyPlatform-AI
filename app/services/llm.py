@@ -51,14 +51,17 @@ def parse_gemini_text(payload: dict) -> str | None:
     return normalized or None
 
 
-def call_gemini(prompt: str, settings: AiSettings) -> str | None:
+def call_gemini(
+    prompt: str,
+    settings: AiSettings,
+    max_output_tokens: int = 512,
+) -> str | None:
     if settings.llm_provider.casefold() != "gemini" or not settings.gemini_api_key:
         return None
 
     model = urllib.parse.quote(settings.gemini_model, safe="")
     url = (
         f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
-        f"?key={settings.gemini_api_key}"
     )
     body = json.dumps(
         {
@@ -71,14 +74,17 @@ def call_gemini(prompt: str, settings: AiSettings) -> str | None:
             "generationConfig": {
                 "temperature": 0.2,
                 "topP": 0.8,
-                "maxOutputTokens": 512,
+                "maxOutputTokens": max_output_tokens,
             },
         }
     ).encode("utf-8")
     request = urllib.request.Request(
         url,
         data=body,
-        headers={"Content-Type": "application/json"},
+        headers={
+            "Content-Type": "application/json",
+            "x-goog-api-key": settings.gemini_api_key,
+        },
         method="POST",
     )
 
@@ -104,4 +110,17 @@ async def generate_gemini_answer(
         return None
 
     prompt = build_gemini_prompt(question, history, citations)
-    return await asyncio.to_thread(call_gemini, prompt, settings)
+    return await generate_gemini_text(prompt, settings)
+
+
+async def generate_gemini_text(
+    prompt: str,
+    settings: AiSettings,
+    max_output_tokens: int = 512,
+) -> str | None:
+    return await asyncio.to_thread(
+        call_gemini,
+        prompt,
+        settings,
+        max_output_tokens,
+    )

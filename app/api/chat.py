@@ -1,8 +1,9 @@
 from typing import Literal
 
-from fastapi import APIRouter, Depends, Header, HTTPException, status
+from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field
 
+from app.api.dependencies import verify_token
 from app.core.config import AiSettings, get_ai_settings
 from app.services.llm import generate_gemini_answer
 from app.services.rag import answer_with_rag
@@ -41,21 +42,6 @@ class ChatResponse(BaseModel):
     in_scope: bool = Field(alias="inScope")
     similarity: float
     citations: list[ChatCitation]
-
-
-def verify_token(
-    authorization: str | None = Header(default=None),
-    settings: AiSettings = Depends(get_ai_settings),
-) -> None:
-    if not settings.ai_token:
-        return
-
-    expected = f"Bearer {settings.ai_token}"
-    if authorization != expected:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid AI service token",
-        )
 
 
 @router.post("", response_model=ChatResponse, dependencies=[Depends(verify_token)])

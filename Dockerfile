@@ -7,6 +7,10 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
+RUN apt-get update \
+    && apt-get install --yes --no-install-recommends ffmpeg \
+    && rm -rf /var/lib/apt/lists/*
+
 COPY --from=ghcr.io/astral-sh/uv:0.12.10 /uv /uvx /usr/local/bin/
 
 COPY pyproject.toml uv.lock ./
@@ -17,7 +21,8 @@ COPY main.py ./
 
 RUN groupadd --system --gid 1001 app \
     && useradd --system --uid 1001 --gid app --home-dir /app app \
-    && chown -R app:app /app
+    && mkdir -p /var/cache/huggingface /var/cache/embeddings \
+    && chown -R app:app /app /var/cache/huggingface /var/cache/embeddings
 
 USER app
 ENV PATH="/app/.venv/bin:$PATH"

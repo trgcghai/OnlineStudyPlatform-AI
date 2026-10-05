@@ -6,7 +6,7 @@ from pydantic import BaseModel, Field
 from app.api.dependencies import verify_token
 from app.core.config import AiSettings, get_ai_settings
 from app.services.llm import generate_gemini_answer
-from app.services.rag import answer_with_rag, build_query
+from app.services.rag import answer_with_rag, build_query, select_history
 from app.services.vector_store import search_course
 
 
@@ -46,16 +46,17 @@ async def chat(
     request: ChatRequest,
     settings: AiSettings = Depends(get_ai_settings),
 ) -> ChatResponse:
+    history = select_history(request.question, request.history)
     matches = await search_course(
         settings,
         request.course_id,
-        build_query(request.question, request.history),
+        build_query(request.question, history),
         request.similarity_threshold,
     )
     result = answer_with_rag(
         question=request.question,
         similarity_threshold=request.similarity_threshold,
-        history=request.history,
+        history=history,
         matches=matches,
     )
     answer = result.answer
@@ -63,7 +64,7 @@ async def chat(
     if result.in_scope:
         generated_answer = await generate_gemini_answer(
             question=request.question,
-            history=request.history,
+            history=history,
             citations=result.citations,
             settings=settings,
         )

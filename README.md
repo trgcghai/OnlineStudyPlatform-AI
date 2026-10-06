@@ -34,5 +34,18 @@ uv run fastapi dev main.py
 uv run python -m unittest discover tests
 ```
 
+### Kaggle Dropout-Risk Bootstrap Training
+
+With `data/kaggle-1/online_learning_engagement_dropout_risk.csv` present and
+MongoDB configured, train and activate a supervised baseline dropout-risk model:
+
+```bash
+uv run python -m scripts/train_kaggle_dropout.py
+```
+
+The script maps Kaggle aggregate engagement fields into the existing dropout-risk
+feature contract, saves the XGBoost artifact under `DROPOUT_MODEL_DIR`, and
+writes active model metadata to MongoDB `ai_model_versions`.
+
 Model Whisper được tải ở lần chạy đầu. Docker Compose gắn volume cache tại
 `/var/cache/huggingface` để các lần khởi động sau không tải lại model.

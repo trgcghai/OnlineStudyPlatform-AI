@@ -19,6 +19,13 @@ from app.schemas.dropout_risk import DropoutRiskFeatures, DropoutRiskPredictRequ
 from app.services.dropout_explainability import explain_prediction, top_feature_from_shap
 from app.services.dropout_model import build_feature_matrix
 from app.services.dropout_training import load_training_samples, train_dropout_model
+from app.services.kaggle_dropout_dataset import (
+    KaggleDropoutDatasetError,
+    load_kaggle_dropout_samples,
+    map_kaggle_dropout_label_to_score,
+    map_kaggle_row_to_features,
+)
+from scripts.train_kaggle_dropout import train_kaggle_dropout_model
 
 
 def valid_features() -> dict:
@@ -35,6 +42,22 @@ def valid_features() -> dict:
         "completionVelocity": 0.35,
         "totalWatchedSeconds": 7200,
         "pauseCount": 14,
+    }
+
+
+def valid_kaggle_row() -> dict[str, str]:
+    return {
+        "student_id": "1",
+        "course_category": "Design",
+        "login_frequency_per_week": "14",
+        "avg_session_minutes": "17",
+        "course_progress_percent": "51",
+        "assignments_completed": "7",
+        "quiz_average_score": "60.42",
+        "forum_interactions": "14",
+        "video_watch_percent": "23",
+        "device_type": "Desktop",
+        "dropout_risk": "Low",
     }
 
 
@@ -123,6 +146,162 @@ class DropoutRiskServiceTests(unittest.TestCase):
 
         self.assertEqual(shap_values["lastActivityDays"], 1.5)
         self.assertEqual(shap_values["activityCount7d"], -2.0)
+
+
+class KaggleDropoutDatasetTests(unittest.TestCase):
+    def test_label_mapping_converts_risk_bands_to_score_targets(self) -> None:
+        self.assertEqual(map_kaggle_dropout_label_to_score("Low"), 20.0)
+        self.assertEqual(map_kaggle_dropout_label_to_score("Medium"), 55.0)
+        self.assertEqual(map_kaggle_dropout_label_to_score("High"), 85.0)
+
+    def test_label_mapping_rejects_unknown_label(self) -> None:
+        with self.assertRaisesRegex(
+            KaggleDropoutDatasetError,
+            "Unsupported dropout_risk label",
+        ):
+            map_kaggle_dropout_label_to_score("Critical")
+
+    def test_maps_low_risk_kaggle_row_to_current_feature_contract(self) -> None:
+        features = map_kaggle_row_to_features(valid_kaggle_row())
+
+        self.assertEqual(features.last_activity_days, 0)
+        self.assertEqual(features.activity_count_7d, 28)
+        self.assertEqual(features.expected_progress_gap, 19)
+        self.assertEqual(features.course_progress_percent, 51)
+        self.assertEqual(features.quiz_score_avg_percent, 60.42)
+        self.assertEqual(features.quiz_pass_rate, 1)
+        self.assertEqual(features.watch_ratio_avg, 0.23)
+        self.assertEqual(features.abandoned_attempt_count, 0)
+        self.assertEqual(features.late_quiz_count, 0)
+        self.assertEqual(features.completion_velocity, 0.51)
+        self.assertEqual(features.total_watched_seconds, 3284.4)
+        self.assertEqual(features.pause_count, 0)
+
+    def test_maps_high_risk_kaggle_row_to_current_feature_contract(self) -> None:
+        row = valid_kaggle_row()
+        row.update(
+            {
+                "login_frequency_per_week": "1",
+                "avg_session_minutes": "87",
+                "course_progress_percent": "34",
+                "assignments_completed": "4",
+                "quiz_average_score": "43.08",
+                "forum_interactions": "26",
+                "video_watch_percent": "75",
+                "dropout_risk": "High",
+            }
+        )
+
+        features = map_kaggle_row_to_features(row)
+
+        self.assertEqual(features.last_activity_days, 12)
+        self.assertEqual(features.activity_count_7d, 27)
+        self.assertEqual(features.expected_progress_gap, 36)
+        self.assertEqual(features.course_progress_percent, 34)
+        self.assertEqual(features.quiz_score_avg_percent, 43.08)
+        self.assertEqual(features.quiz_pass_rate, 0)
+        self.assertEqual(features.watch_ratio_avg, 0.75)
+        self.assertEqual(features.abandoned_attempt_count, 2)
+        self.assertEqual(features.late_quiz_count, 0)
+        self.assertEqual(features.completion_velocity, 0.1943)
+        self.assertEqual(features.total_watched_seconds, 3915)
+        self.assertEqual(features.pause_count, 0)
+
+    def test_load_kaggle_dropout_samples_reads_csv_in_feature_order(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            csv_path = Path(tmp) / "kaggle.csv"
+            csv_path.write_text(
+                "student_id,course_category,login_frequency_per_week,avg_session_minutes,"
+                "course_progress_percent,assignments_completed,quiz_average_score,"
+                "forum_interactions,video_watch_percent,device_type,dropout_risk\n"
+                "1,Design,14,17,51,7,60.42,14,23,Desktop,Low\n",
+                encoding="utf-8",
+            )
+
+            matrix, targets = load_kaggle_dropout_samples(csv_path)
+
+        self.assertEqual(matrix.shape, (1, len(FEATURE_COLUMNS)))
+        self.assertEqual(
+            matrix[0].tolist(),
+            [0, 28, 19, 51, 60.42, 1, 0.23, 0, 0, 0.51, 3284.4, 0],
+        )
+        self.assertEqual(targets.tolist(), [20.0])
+
+    def test_load_kaggle_dropout_samples_rejects_missing_required_column(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            csv_path = Path(tmp) / "kaggle.csv"
+            csv_path.write_text(
+                "student_id,dropout_risk\n"
+                "1,Low\n",
+                encoding="utf-8",
+            )
+
+            with self.assertRaisesRegex(
+                KaggleDropoutDatasetError,
+                "Missing required Kaggle columns",
+            ):
+                load_kaggle_dropout_samples(csv_path)
+
+    def test_load_kaggle_dropout_samples_rejects_malformed_numeric_value(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            csv_path = Path(tmp) / "kaggle.csv"
+            csv_path.write_text(
+                "student_id,course_category,login_frequency_per_week,avg_session_minutes,"
+                "course_progress_percent,assignments_completed,quiz_average_score,"
+                "forum_interactions,video_watch_percent,device_type,dropout_risk\n"
+                "1,Design,not-a-number,17,51,7,60.42,14,23,Desktop,Low\n",
+                encoding="utf-8",
+            )
+
+            with self.assertRaisesRegex(
+                KaggleDropoutDatasetError,
+                "Invalid numeric value for login_frequency_per_week",
+            ):
+                load_kaggle_dropout_samples(csv_path)
+
+
+class KaggleDropoutTrainingScriptTests(unittest.IsolatedAsyncioTestCase):
+    async def test_train_kaggle_dropout_model_writes_artifact_and_metadata(self) -> None:
+        rows = [
+            "student_id,course_category,login_frequency_per_week,avg_session_minutes,"
+            "course_progress_percent,assignments_completed,quiz_average_score,"
+            "forum_interactions,video_watch_percent,device_type,dropout_risk\n",
+        ]
+        labels = ["Low", "Medium", "High"] * 4
+        for index, label in enumerate(labels, start=1):
+            rows.append(
+                f"{index},Design,{1 + index % 14},30,"
+                f"{20 + index},5,60,{index % 10},70,Desktop,{label}\n"
+            )
+
+        database = FakeDatabase([])
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            csv_path = root / "kaggle.csv"
+            model_dir = root / "models" / "dropout-risk"
+            csv_path.write_text("".join(rows), encoding="utf-8")
+
+            response = await train_kaggle_dropout_model(
+                database=database,
+                csv_path=csv_path,
+                model_dir=model_dir,
+            )
+
+            artifact_path = Path(response.artifact_path)
+            self.assertTrue(artifact_path.exists())
+
+        self.assertEqual(response.model_version, "dropout-xgb-v1")
+        self.assertEqual(response.feature_version, "dropout_features_v1")
+        self.assertEqual(response.sample_count, 12)
+        self.assertTrue(response.is_active)
+        self.assertIn("mae", response.metrics)
+        self.assertIn("rmse", response.metrics)
+        self.assertEqual(len(database.ai_model_versions.update_many_calls), 1)
+        self.assertEqual(len(database.ai_model_versions.replace_one_calls), 1)
+        _, metadata, upsert = database.ai_model_versions.replace_one_calls[0]
+        self.assertTrue(upsert)
+        self.assertEqual(metadata["trainingSource"], "kaggle-1")
+        self.assertEqual(metadata["sampleCount"], 12)
 
 
 class FakeCursor:

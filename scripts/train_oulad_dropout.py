@@ -8,7 +8,7 @@ from sklearn.model_selection import train_test_split
 from app.core.config import get_ai_settings
 from app.db.mongo import get_mongo_database
 from app.ml.dropout_constants import DROPOUT_OULAD_MODEL_VERSION
-from app.schemas.dropout_risk import DropoutRiskTrainResponse
+from app.schemas.dropout_risk import ActiveDropoutModelResponse
 from app.services.dropout_model_registry import register_dropout_model
 from app.services.oulad_dropout_dataset import (
     DEFAULT_OULAD_SNAPSHOT_DAY,
@@ -26,7 +26,7 @@ async def train_oulad_dropout_model(
     data_dir: Path,
     model_dir: Path,
     snapshot_day: int = DEFAULT_OULAD_SNAPSHOT_DAY,
-) -> DropoutRiskTrainResponse:
+) -> ActiveDropoutModelResponse:
     matrix, targets, dataset_metadata = load_oulad_dropout_samples(
         data_dir,
         snapshot_day=snapshot_day,

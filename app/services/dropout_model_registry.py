@@ -7,7 +7,7 @@ from app.ml.dropout_constants import (
     MODEL_ARTIFACT_NAME,
     MODEL_NAME,
 )
-from app.schemas.dropout_risk import DropoutRiskTrainResponse
+from app.schemas.dropout_risk import ActiveDropoutModelResponse
 
 
 async def register_dropout_model(
@@ -20,7 +20,7 @@ async def register_dropout_model(
     metrics: dict[str, float],
     trained_at: datetime | None = None,
     extra_metadata: dict[str, Any] | None = None,
-) -> DropoutRiskTrainResponse:
+) -> ActiveDropoutModelResponse:
     artifact_dir = model_dir / model_version
     artifact_dir.mkdir(parents=True, exist_ok=True)
     artifact_path = artifact_dir / MODEL_ARTIFACT_NAME
@@ -50,4 +50,4 @@ async def register_dropout_model(
         upsert=True,
     )
 
-    return DropoutRiskTrainResponse(**metadata)
+    return ActiveDropoutModelResponse(**metadata)

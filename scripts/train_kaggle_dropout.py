@@ -8,7 +8,7 @@ from sklearn.model_selection import train_test_split
 from app.core.config import get_ai_settings
 from app.db.mongo import get_mongo_database
 from app.ml.dropout_constants import DROPOUT_KAGGLE_MODEL_VERSION
-from app.schemas.dropout_risk import DropoutRiskTrainResponse
+from app.schemas.dropout_risk import ActiveDropoutModelResponse
 from app.services.dropout_model_registry import register_dropout_model
 from app.services.kaggle_dropout_dataset import load_kaggle_dropout_samples
 
@@ -26,7 +26,7 @@ async def train_kaggle_dropout_model(
     database: object,
     csv_path: Path,
     model_dir: Path,
-) -> DropoutRiskTrainResponse:
+) -> ActiveDropoutModelResponse:
     matrix, targets = load_kaggle_dropout_samples(csv_path)
     sample_count = int(targets.shape[0])
 

@@ -26,7 +26,6 @@ from app.services.oulad_dropout_dataset import (
     map_oulad_final_result_to_score,
 )
 from app.services.dropout_model import build_feature_matrix
-from app.services.dropout_training import load_training_samples, train_dropout_model
 from app.services.kaggle_dropout_dataset import (
     KaggleDropoutDatasetError,
     load_kaggle_dropout_samples,
@@ -492,56 +491,7 @@ class FakeCollection:
 
 class FakeDatabase:
     def __init__(self, rows: list[dict] | None = None) -> None:
-        self.risk_scores = FakeCollection(rows)
         self.ai_model_versions = FakeCollection()
-
-
-def risk_score_doc(index: int, score: float) -> dict:
-    features = valid_features()
-    features["lastActivityDays"] = index
-    return {
-        "source": "heuristic",
-        "featureVersion": "dropout_features_v1",
-        "features": features,
-        "score": score,
-    }
-
-
-class DropoutRiskTrainingTests(unittest.IsolatedAsyncioTestCase):
-    async def test_load_training_samples_filters_valid_documents(self) -> None:
-        database = FakeDatabase(
-            [
-                risk_score_doc(1, 40),
-                {"source": "heuristic", "featureVersion": "dropout_features_v1"},
-            ]
-        )
-
-        matrix, targets = await load_training_samples(database)
-
-        self.assertEqual(matrix.shape, (1, len(FEATURE_COLUMNS)))
-        self.assertEqual(targets.tolist(), [40.0])
-
-    async def test_train_dropout_model_rejects_low_sample_count(self) -> None:
-        database = FakeDatabase([risk_score_doc(index, 50) for index in range(3)])
-
-        with tempfile.TemporaryDirectory() as tmp:
-            with self.assertRaises(ValueError):
-                await train_dropout_model(database, Path(tmp), min_samples=10)
-
-    async def test_train_dropout_model_writes_artifact_and_metadata(self) -> None:
-        database = FakeDatabase(
-            [risk_score_doc(index, float(20 + index)) for index in range(12)]
-        )
-
-        with tempfile.TemporaryDirectory() as tmp:
-            response = await train_dropout_model(database, Path(tmp), min_samples=10)
-
-        self.assertEqual(response.model_version, "dropout-xgb-v1")
-        self.assertTrue(response.is_active)
-        self.assertGreaterEqual(response.sample_count, 12)
-        self.assertIn("mae", response.metrics)
-        self.assertEqual(len(database.ai_model_versions.update_many_calls), 1)
-        self.assertEqual(len(database.ai_model_versions.replace_one_calls), 1)
 
 
 class DropoutRiskApiTests(unittest.TestCase):
@@ -576,14 +526,12 @@ class DropoutRiskApiTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 401)
 
-    def test_train_returns_400_when_training_samples_are_too_low(self) -> None:
+    def test_train_endpoint_is_not_registered(self) -> None:
         self.allow_without_token()
-        app.dependency_overrides[get_dropout_database] = lambda: FakeDatabase([])
 
         response = TestClient(app).post("/analytics/dropout-risk/train")
 
-        self.assertEqual(response.status_code, 400)
-        self.assertIn("valid samples", response.json()["detail"])
+        self.assertEqual(response.status_code, 404)
 
     def test_active_model_endpoint_returns_metadata(self) -> None:
         self.allow_without_token()

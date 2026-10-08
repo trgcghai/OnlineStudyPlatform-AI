@@ -40,12 +40,21 @@ With `data/kaggle-1/online_learning_engagement_dropout_risk.csv` present and
 MongoDB configured, train and activate a supervised baseline dropout-risk model:
 
 ```bash
-uv run python -m scripts/train_kaggle_dropout.py
+uv run python -m scripts.train_kaggle_dropout
 ```
 
 The script maps Kaggle aggregate engagement fields into the existing dropout-risk
 feature contract, saves the XGBoost artifact under `DROPOUT_MODEL_DIR`, and
 writes active model metadata to MongoDB `ai_model_versions`.
+
+Train and activate the separate OULAD supervised baseline model:
+
+```bash
+uv run python -m scripts.train_oulad_dropout
+```
+
+Kaggle and OULAD artifacts are saved under separate model-version folders so they
+can be compared before choosing which model to keep active.
 
 Model Whisper được tải ở lần chạy đầu. Docker Compose gắn volume cache tại
 `/var/cache/huggingface` để các lần khởi động sau không tải lại model.

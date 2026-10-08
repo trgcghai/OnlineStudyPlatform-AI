@@ -54,9 +54,10 @@ class DropoutRiskPredictResponse(BaseModel):
     predicted_at: datetime = Field(alias="predictedAt")
 
 
-class DropoutRiskTrainResponse(BaseModel):
+class ActiveDropoutModelResponse(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
+    model_name: str = Field(alias="modelName")
     model_version: str = Field(alias="modelVersion")
     feature_version: str = Field(alias="featureVersion")
     trained_at: datetime = Field(alias="trainedAt")
@@ -64,7 +65,3 @@ class DropoutRiskTrainResponse(BaseModel):
     metrics: dict[str, float]
     artifact_path: str = Field(alias="artifactPath")
     is_active: bool = Field(alias="isActive")
-
-
-class ActiveDropoutModelResponse(DropoutRiskTrainResponse):
-    model_name: str = Field(alias="modelName")

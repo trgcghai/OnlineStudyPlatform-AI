@@ -1,5 +1,4 @@
 from datetime import UTC, datetime
-from pathlib import Path
 
 from fastapi import APIRouter, Depends, Header, HTTPException, status
 from motor.motor_asyncio import AsyncIOMotorDatabase
@@ -15,7 +14,6 @@ from app.schemas.dropout_risk import (
     ActiveDropoutModelResponse,
     DropoutRiskPredictRequest,
     DropoutRiskPredictResponse,
-    DropoutRiskTrainResponse,
 )
 from app.services.dropout_explainability import explain_prediction, top_feature_from_shap
 from app.services.dropout_model import (
@@ -24,7 +22,6 @@ from app.services.dropout_model import (
     get_active_model_metadata,
     load_xgboost_model,
 )
-from app.services.dropout_training import train_dropout_model
 
 
 router = APIRouter(prefix="/analytics/dropout-risk", tags=["dropout-risk"])
@@ -92,25 +89,6 @@ async def predict_dropout_risk(
         modelVersion=metadata["modelVersion"],
         predictedAt=datetime.now(UTC),
     )
-
-
-@router.post(
-    "/train",
-    response_model=DropoutRiskTrainResponse,
-    dependencies=[Depends(verify_token)],
-)
-async def train_dropout_risk(
-    database: AsyncIOMotorDatabase = Depends(get_dropout_database),
-    settings: AiSettings = Depends(get_ai_settings),
-) -> DropoutRiskTrainResponse:
-    try:
-        return await train_dropout_model(
-            database,
-            Path(settings.dropout_model_dir),
-            settings.dropout_min_training_samples,
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
 
 @router.get(

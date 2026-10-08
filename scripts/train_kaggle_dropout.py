@@ -1,5 +1,4 @@
 import asyncio
-from datetime import UTC, datetime
 from pathlib import Path
 
 import xgboost as xgb
@@ -8,13 +7,9 @@ from sklearn.model_selection import train_test_split
 
 from app.core.config import get_ai_settings
 from app.db.mongo import get_mongo_database
-from app.ml.dropout_constants import (
-    FEATURE_VERSION,
-    MODEL_ARTIFACT_NAME,
-    MODEL_NAME,
-    MODEL_VERSION,
-)
+from app.ml.dropout_constants import DROPOUT_KAGGLE_MODEL_VERSION
 from app.schemas.dropout_risk import DropoutRiskTrainResponse
+from app.services.dropout_model_registry import register_dropout_model
 from app.services.kaggle_dropout_dataset import load_kaggle_dropout_samples
 
 
@@ -57,36 +52,18 @@ async def train_kaggle_dropout_model(
         "rmse": round(float(mean_squared_error(y_test, predictions) ** 0.5), 4),
     }
 
-    artifact_dir = model_dir / MODEL_VERSION
-    artifact_dir.mkdir(parents=True, exist_ok=True)
-    artifact_path = artifact_dir / MODEL_ARTIFACT_NAME
-    model.save_model(artifact_path)
-    trained_at = datetime.now(UTC)
-    metadata = {
-        "_id": MODEL_VERSION,
-        "modelName": MODEL_NAME,
-        "modelVersion": MODEL_VERSION,
-        "featureVersion": FEATURE_VERSION,
-        "artifactPath": artifact_path.as_posix(),
-        "trainedAt": trained_at,
-        "sampleCount": sample_count,
-        "metrics": metrics,
-        "isActive": True,
-        "trainingSource": "kaggle-1",
-        "datasetPath": csv_path.as_posix(),
-    }
-
-    await database.ai_model_versions.update_many(
-        {"modelName": MODEL_NAME},
-        {"$set": {"isActive": False}},
+    return await register_dropout_model(
+        database=database,
+        model=model,
+        model_dir=model_dir,
+        model_version=DROPOUT_KAGGLE_MODEL_VERSION,
+        sample_count=sample_count,
+        metrics=metrics,
+        extra_metadata={
+            "trainingSource": "kaggle-1",
+            "datasetPath": csv_path.as_posix(),
+        },
     )
-    await database.ai_model_versions.replace_one(
-        {"_id": MODEL_VERSION},
-        metadata,
-        upsert=True,
-    )
-
-    return DropoutRiskTrainResponse(**metadata)
 
 
 async def main() -> None:

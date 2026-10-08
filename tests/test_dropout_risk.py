@@ -11,12 +11,20 @@ from app.api.dropout_risk import get_dropout_database
 from app.core.config import get_ai_settings
 from app.main import app
 from app.ml.dropout_constants import (
+    DROPOUT_KAGGLE_MODEL_VERSION,
+    DROPOUT_OULAD_MODEL_VERSION,
     FEATURE_COLUMNS,
     recommended_action_for_feature,
     risk_band_for_score,
 )
 from app.schemas.dropout_risk import DropoutRiskFeatures, DropoutRiskPredictRequest
 from app.services.dropout_explainability import explain_prediction, top_feature_from_shap
+from app.services.oulad_dropout_dataset import (
+    DEFAULT_OULAD_SNAPSHOT_DAY,
+    OuladDropoutDatasetError,
+    load_oulad_dropout_samples,
+    map_oulad_final_result_to_score,
+)
 from app.services.dropout_model import build_feature_matrix
 from app.services.dropout_training import load_training_samples, train_dropout_model
 from app.services.kaggle_dropout_dataset import (
@@ -25,7 +33,9 @@ from app.services.kaggle_dropout_dataset import (
     map_kaggle_dropout_label_to_score,
     map_kaggle_row_to_features,
 )
+from app.services.dropout_model_registry import register_dropout_model
 from scripts.train_kaggle_dropout import train_kaggle_dropout_model
+from scripts.train_oulad_dropout import train_oulad_dropout_model
 
 
 def valid_features() -> dict:
@@ -61,7 +71,58 @@ def valid_kaggle_row() -> dict[str, str]:
     }
 
 
+def write_minimal_oulad_dataset(root: Path) -> Path:
+    root.mkdir(parents=True, exist_ok=True)
+    (root / "courses.csv").write_text(
+        "code_module,code_presentation,module_presentation_length\n"
+        "AAA,2013J,100\n",
+        encoding="utf-8",
+    )
+    (root / "assessments.csv").write_text(
+        "code_module,code_presentation,id_assessment,assessment_type,date,weight\n"
+        "AAA,2013J,1,TMA,20,30\n"
+        "AAA,2013J,2,TMA,50,30\n"
+        "AAA,2013J,3,TMA,80,40\n",
+        encoding="utf-8",
+    )
+    (root / "studentInfo.csv").write_text(
+        "code_module,code_presentation,id_student,gender,region,highest_education,"
+        "imd_band,age_band,num_of_prev_attempts,studied_credits,disability,final_result\n"
+        "AAA,2013J,10,M,Region,A Level,50-60%,0-35,0,60,N,Fail\n"
+        "AAA,2013J,11,F,Region,A Level,50-60%,0-35,0,60,N,Pass\n",
+        encoding="utf-8",
+    )
+    (root / "studentRegistration.csv").write_text(
+        "code_module,code_presentation,id_student,date_registration,date_unregistration\n"
+        "AAA,2013J,10,0,?\n"
+        "AAA,2013J,11,0,?\n",
+        encoding="utf-8",
+    )
+    (root / "studentAssessment.csv").write_text(
+        "id_assessment,id_student,date_submitted,is_banked,score\n"
+        "1,10,22,0,80\n"
+        "2,10,55,0,30\n"
+        "1,11,20,0,90\n"
+        "2,11,48,0,85\n",
+        encoding="utf-8",
+    )
+    (root / "studentVle.csv").write_text(
+        "code_module,code_presentation,id_student,id_site,date,sum_click\n"
+        "AAA,2013J,10,100,10,20\n"
+        "AAA,2013J,10,101,54,3\n"
+        "AAA,2013J,10,102,59,7\n"
+        "AAA,2013J,11,100,58,20\n"
+        "AAA,2013J,11,101,60,10\n",
+        encoding="utf-8",
+    )
+    return root
+
+
 class DropoutRiskSchemaTests(unittest.TestCase):
+    def test_dataset_specific_model_versions_are_defined(self) -> None:
+        self.assertEqual(DROPOUT_KAGGLE_MODEL_VERSION, "dropout-kaggle-v1")
+        self.assertEqual(DROPOUT_OULAD_MODEL_VERSION, "dropout-oulad-v1")
+
     def test_feature_order_matches_backend_contract(self) -> None:
         self.assertEqual(
             FEATURE_COLUMNS,
@@ -146,6 +207,39 @@ class DropoutRiskServiceTests(unittest.TestCase):
 
         self.assertEqual(shap_values["lastActivityDays"], 1.5)
         self.assertEqual(shap_values["activityCount7d"], -2.0)
+
+
+class DropoutModelRegistryTests(unittest.IsolatedAsyncioTestCase):
+    async def test_register_dropout_model_writes_versioned_artifact_and_metadata(self) -> None:
+        model = Mock()
+        database = FakeDatabase([])
+        trained_at = datetime(2026, 10, 6, tzinfo=UTC)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            response = await register_dropout_model(
+                database=database,
+                model=model,
+                model_dir=Path(tmp),
+                model_version="dropout-test-v1",
+                sample_count=12,
+                metrics={"mae": 1.23, "rmse": 2.34},
+                trained_at=trained_at,
+                extra_metadata={"trainingSource": "unit-test"},
+            )
+
+            expected_artifact = Path(tmp) / "dropout-test-v1" / "model.json"
+            model.save_model.assert_called_once_with(expected_artifact)
+
+        self.assertEqual(response.model_version, "dropout-test-v1")
+        self.assertEqual(response.artifact_path, expected_artifact.as_posix())
+        self.assertTrue(response.is_active)
+        self.assertEqual(len(database.ai_model_versions.update_many_calls), 1)
+        self.assertEqual(len(database.ai_model_versions.replace_one_calls), 1)
+        query, metadata, upsert = database.ai_model_versions.replace_one_calls[0]
+        self.assertEqual(query, {"_id": "dropout-test-v1"})
+        self.assertTrue(upsert)
+        self.assertEqual(metadata["trainingSource"], "unit-test")
+        self.assertEqual(metadata["artifactPath"], expected_artifact.as_posix())
 
 
 class KaggleDropoutDatasetTests(unittest.TestCase):
@@ -260,6 +354,40 @@ class KaggleDropoutDatasetTests(unittest.TestCase):
                 load_kaggle_dropout_samples(csv_path)
 
 
+class OuladDropoutDatasetTests(unittest.TestCase):
+    def test_oulad_target_mapping_uses_at_risk_policy(self) -> None:
+        self.assertEqual(map_oulad_final_result_to_score("Withdrawn"), 85.0)
+        self.assertEqual(map_oulad_final_result_to_score("Fail"), 85.0)
+        self.assertEqual(map_oulad_final_result_to_score("Pass"), 20.0)
+        self.assertEqual(map_oulad_final_result_to_score("Distinction"), 20.0)
+
+    def test_oulad_target_mapping_rejects_unknown_result(self) -> None:
+        with self.assertRaisesRegex(OuladDropoutDatasetError, "Unsupported final_result"):
+            map_oulad_final_result_to_score("Unknown")
+
+    def test_load_oulad_dropout_samples_builds_features_from_relational_csvs(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            data_dir = write_minimal_oulad_dataset(Path(tmp) / "oulad")
+            matrix, targets, metadata = load_oulad_dropout_samples(data_dir)
+
+        self.assertEqual(matrix.shape, (2, len(FEATURE_COLUMNS)))
+        self.assertEqual(targets.tolist(), [85.0, 20.0])
+        self.assertEqual(metadata["sampleCount"], 2)
+        self.assertEqual(metadata["snapshotDay"], DEFAULT_OULAD_SNAPSHOT_DAY)
+        self.assertEqual(metadata["skippedRows"], 0)
+        self.assertEqual(
+            matrix[0].tolist(),
+            [1, 10, 0, 66.6667, 55.0, 0.5, 1.0, 0, 2, 0.0333, 900, 0],
+        )
+
+    def test_load_oulad_dropout_samples_rejects_missing_required_file(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            data_dir = Path(tmp) / "oulad"
+            data_dir.mkdir()
+            with self.assertRaisesRegex(OuladDropoutDatasetError, "Missing OULAD file"):
+                load_oulad_dropout_samples(data_dir)
+
+
 class KaggleDropoutTrainingScriptTests(unittest.IsolatedAsyncioTestCase):
     async def test_train_kaggle_dropout_model_writes_artifact_and_metadata(self) -> None:
         rows = [
@@ -290,7 +418,8 @@ class KaggleDropoutTrainingScriptTests(unittest.IsolatedAsyncioTestCase):
             artifact_path = Path(response.artifact_path)
             self.assertTrue(artifact_path.exists())
 
-        self.assertEqual(response.model_version, "dropout-xgb-v1")
+        self.assertEqual(response.model_version, DROPOUT_KAGGLE_MODEL_VERSION)
+        self.assertIn(DROPOUT_KAGGLE_MODEL_VERSION, artifact_path.parts)
         self.assertEqual(response.feature_version, "dropout_features_v1")
         self.assertEqual(response.sample_count, 12)
         self.assertTrue(response.is_active)
@@ -302,6 +431,38 @@ class KaggleDropoutTrainingScriptTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(upsert)
         self.assertEqual(metadata["trainingSource"], "kaggle-1")
         self.assertEqual(metadata["sampleCount"], 12)
+
+
+class OuladDropoutTrainingScriptTests(unittest.IsolatedAsyncioTestCase):
+    async def test_train_oulad_dropout_model_writes_artifact_and_metadata(self) -> None:
+        database = FakeDatabase([])
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            data_dir = write_minimal_oulad_dataset(root / "oulad")
+            model_dir = root / "models" / "dropout-risk"
+
+            response = await train_oulad_dropout_model(
+                database=database,
+                data_dir=data_dir,
+                model_dir=model_dir,
+            )
+
+            artifact_path = Path(response.artifact_path)
+            self.assertTrue(artifact_path.exists())
+
+        self.assertEqual(response.model_version, DROPOUT_OULAD_MODEL_VERSION)
+        self.assertEqual(response.feature_version, "dropout_features_v1")
+        self.assertEqual(response.sample_count, 2)
+        self.assertTrue(response.is_active)
+        self.assertIn("mae", response.metrics)
+        self.assertIn("rmse", response.metrics)
+        self.assertEqual(len(database.ai_model_versions.update_many_calls), 1)
+        self.assertEqual(len(database.ai_model_versions.replace_one_calls), 1)
+        _, metadata, upsert = database.ai_model_versions.replace_one_calls[0]
+        self.assertTrue(upsert)
+        self.assertEqual(metadata["trainingSource"], "oulad")
+        self.assertEqual(metadata["targetPolicy"], "withdrawn_fail_vs_pass_distinction")
+        self.assertEqual(metadata["snapshotDay"], DEFAULT_OULAD_SNAPSHOT_DAY)
 
 
 class FakeCursor:

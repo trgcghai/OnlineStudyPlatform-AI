@@ -1,6 +1,8 @@
 FEATURE_VERSION = "dropout_features_v1"
 MODEL_NAME = "dropout-risk-xgboost"
 MODEL_VERSION = "dropout-xgb-v1"
+DROPOUT_KAGGLE_MODEL_VERSION = "dropout-kaggle-v1"
+DROPOUT_OULAD_MODEL_VERSION = "dropout-oulad-v1"
 MODEL_ARTIFACT_NAME = "model.json"
 
 FEATURE_COLUMNS = [

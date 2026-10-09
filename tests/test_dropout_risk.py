@@ -25,7 +25,17 @@ from app.services.oulad_dropout_dataset import (
     load_oulad_dropout_samples,
     map_oulad_final_result_to_score,
 )
-from app.services.dropout_model import build_feature_matrix
+from app.services.dropout_model import (
+    build_feature_matrix,
+    resolve_model_artifact_path,
+)
+from app.services.model_artifact_store import (
+    ModelArtifactLocation,
+    build_model_object_key,
+    cached_model_path,
+    download_model_artifact,
+    upload_model_artifact,
+)
 from app.services.kaggle_dropout_dataset import (
     KaggleDropoutDatasetError,
     load_kaggle_dropout_samples,
@@ -180,6 +190,43 @@ class DropoutRiskServiceTests(unittest.TestCase):
         self.assertEqual(matrix[0][0], 5)
         self.assertEqual(matrix[0][-1], 14)
 
+    def test_resolve_model_artifact_path_downloads_minio_artifact(self) -> None:
+        client = FakeMinioClient()
+        metadata = {
+            "modelVersion": "dropout-oulad-v1",
+            "artifactStorage": "minio",
+            "artifactBucket": "ai-models",
+            "artifactObjectKey": "dropout-risk/dropout-oulad-v1/model.json",
+            "artifactPath": "minio://ai-models/dropout-risk/dropout-oulad-v1/model.json",
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            path = resolve_model_artifact_path(
+                metadata,
+                artifact_client=client,
+                cache_root=Path(tmp),
+            )
+
+            self.assertTrue(path.exists())
+
+        self.assertEqual(client.fget_object_calls[0][0], "ai-models")
+        self.assertEqual(
+            client.fget_object_calls[0][1],
+            "dropout-risk/dropout-oulad-v1/model.json",
+        )
+
+    def test_resolve_model_artifact_path_rejects_legacy_local_metadata(self) -> None:
+        metadata = {
+            "modelVersion": "dropout-xgb-v1",
+            "artifactPath": "models/dropout-risk/dropout-xgb-v1/model.json",
+        }
+
+        with self.assertRaisesRegex(ValueError, "Unsupported model artifact storage"):
+            resolve_model_artifact_path(
+                metadata,
+                artifact_client=FakeMinioClient(),
+                cache_root=Path("/cache"),
+            )
+
     def test_top_feature_prefers_highest_positive_shap_value(self) -> None:
         shap_values = {
             "lastActivityDays": -5.0,
@@ -208,6 +255,101 @@ class DropoutRiskServiceTests(unittest.TestCase):
         self.assertEqual(shap_values["activityCount7d"], -2.0)
 
 
+class FakeMinioClient:
+    def __init__(self) -> None:
+        self.buckets: set[str] = set()
+        self.bucket_exists_calls: list[str] = []
+        self.make_bucket_calls: list[str] = []
+        self.fput_object_calls: list[tuple[str, str, str]] = []
+        self.fget_object_calls: list[tuple[str, str, str]] = []
+
+    def bucket_exists(self, bucket_name: str) -> bool:
+        self.bucket_exists_calls.append(bucket_name)
+        return bucket_name in self.buckets
+
+    def make_bucket(self, bucket_name: str) -> None:
+        self.make_bucket_calls.append(bucket_name)
+        self.buckets.add(bucket_name)
+
+    def fput_object(self, bucket_name: str, object_name: str, file_path: str) -> object:
+        self.fput_object_calls.append((bucket_name, object_name, file_path))
+
+        class Result:
+            etag = "unit-etag"
+
+        return Result()
+
+    def fget_object(self, bucket_name: str, object_name: str, file_path: str) -> None:
+        self.fget_object_calls.append((bucket_name, object_name, file_path))
+        Path(file_path).parent.mkdir(parents=True, exist_ok=True)
+        Path(file_path).write_text("downloaded-model", encoding="utf-8")
+
+
+class ModelArtifactStoreTests(unittest.TestCase):
+    def test_build_model_object_key_uses_dropout_risk_prefix(self) -> None:
+        self.assertEqual(
+            build_model_object_key("dropout-oulad-v1"),
+            "dropout-risk/dropout-oulad-v1/model.json",
+        )
+
+    def test_upload_model_artifact_creates_bucket_and_returns_location(self) -> None:
+        client = FakeMinioClient()
+        with tempfile.TemporaryDirectory() as tmp:
+            artifact = Path(tmp) / "model.json"
+            artifact.write_text("model", encoding="utf-8")
+
+            location = upload_model_artifact(
+                client=client,
+                bucket_name="ai-models",
+                model_version="dropout-oulad-v1",
+                artifact_path=artifact,
+            )
+
+        self.assertEqual(client.make_bucket_calls, ["ai-models"])
+        self.assertEqual(
+            client.fput_object_calls[0][1],
+            "dropout-risk/dropout-oulad-v1/model.json",
+        )
+        self.assertEqual(location.storage, "minio")
+        self.assertEqual(location.bucket, "ai-models")
+        self.assertEqual(location.etag, "unit-etag")
+        self.assertEqual(
+            location.uri,
+            "minio://ai-models/dropout-risk/dropout-oulad-v1/model.json",
+        )
+
+    def test_cached_model_path_uses_cache_root_and_model_version(self) -> None:
+        self.assertEqual(
+            cached_model_path(Path("/cache"), "dropout-oulad-v1"),
+            Path("/cache/dropout-risk/dropout-oulad-v1/model.json"),
+        )
+
+    def test_download_model_artifact_reuses_cached_file(self) -> None:
+        client = FakeMinioClient()
+        location = ModelArtifactLocation(
+            storage="minio",
+            bucket="ai-models",
+            object_key="dropout-risk/dropout-oulad-v1/model.json",
+            uri="minio://ai-models/dropout-risk/dropout-oulad-v1/model.json",
+            etag="unit-etag",
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            cache_root = Path(tmp)
+            cached = cached_model_path(cache_root, "dropout-oulad-v1")
+            cached.parent.mkdir(parents=True)
+            cached.write_text("cached-model", encoding="utf-8")
+
+            result = download_model_artifact(
+                client=client,
+                location=location,
+                cache_root=cache_root,
+                model_version="dropout-oulad-v1",
+            )
+
+        self.assertEqual(result, cached)
+        self.assertEqual(client.fget_object_calls, [])
+
+
 class DropoutModelRegistryTests(unittest.IsolatedAsyncioTestCase):
     async def test_register_dropout_model_writes_versioned_artifact_and_metadata(self) -> None:
         model = Mock()
@@ -215,10 +357,13 @@ class DropoutModelRegistryTests(unittest.IsolatedAsyncioTestCase):
         trained_at = datetime(2026, 10, 6, tzinfo=UTC)
 
         with tempfile.TemporaryDirectory() as tmp:
+            client = FakeMinioClient()
             response = await register_dropout_model(
                 database=database,
                 model=model,
-                model_dir=Path(tmp),
+                artifact_client=client,
+                artifact_bucket="ai-models",
+                temp_dir=Path(tmp) / "tmp-artifacts",
                 model_version="dropout-test-v1",
                 sample_count=12,
                 metrics={"mae": 1.23, "rmse": 2.34},
@@ -226,11 +371,21 @@ class DropoutModelRegistryTests(unittest.IsolatedAsyncioTestCase):
                 extra_metadata={"trainingSource": "unit-test"},
             )
 
-            expected_artifact = Path(tmp) / "dropout-test-v1" / "model.json"
+            expected_artifact = (
+                Path(tmp) / "tmp-artifacts" / "dropout-test-v1" / "model.json"
+            )
             model.save_model.assert_called_once_with(expected_artifact)
+            self.assertEqual(client.fput_object_calls[0][0], "ai-models")
+            self.assertEqual(
+                client.fput_object_calls[0][1],
+                "dropout-risk/dropout-test-v1/model.json",
+            )
 
         self.assertEqual(response.model_version, "dropout-test-v1")
-        self.assertEqual(response.artifact_path, expected_artifact.as_posix())
+        self.assertEqual(
+            response.artifact_path,
+            "minio://ai-models/dropout-risk/dropout-test-v1/model.json",
+        )
         self.assertTrue(response.is_active)
         self.assertEqual(len(database.ai_model_versions.update_many_calls), 1)
         self.assertEqual(len(database.ai_model_versions.replace_one_calls), 1)
@@ -238,7 +393,13 @@ class DropoutModelRegistryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(query, {"_id": "dropout-test-v1"})
         self.assertTrue(upsert)
         self.assertEqual(metadata["trainingSource"], "unit-test")
-        self.assertEqual(metadata["artifactPath"], expected_artifact.as_posix())
+        self.assertEqual(metadata["artifactStorage"], "minio")
+        self.assertEqual(metadata["artifactBucket"], "ai-models")
+        self.assertEqual(
+            metadata["artifactObjectKey"],
+            "dropout-risk/dropout-test-v1/model.json",
+        )
+        self.assertEqual(metadata["artifactEtag"], "unit-etag")
 
 
 class KaggleDropoutDatasetTests(unittest.TestCase):
@@ -405,20 +566,21 @@ class KaggleDropoutTrainingScriptTests(unittest.IsolatedAsyncioTestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             csv_path = root / "kaggle.csv"
-            model_dir = root / "models" / "dropout-risk"
+            client = FakeMinioClient()
             csv_path.write_text("".join(rows), encoding="utf-8")
 
             response = await train_kaggle_dropout_model(
                 database=database,
                 csv_path=csv_path,
-                model_dir=model_dir,
+                artifact_client=client,
+                artifact_bucket="ai-models",
+                temp_dir=root / "tmp-artifacts",
             )
 
-            artifact_path = Path(response.artifact_path)
-            self.assertTrue(artifact_path.exists())
+            self.assertTrue(response.artifact_path.startswith("minio://ai-models/"))
+            self.assertEqual(client.fput_object_calls[0][0], "ai-models")
 
         self.assertEqual(response.model_version, DROPOUT_KAGGLE_MODEL_VERSION)
-        self.assertIn(DROPOUT_KAGGLE_MODEL_VERSION, artifact_path.parts)
         self.assertEqual(response.feature_version, "dropout_features_v1")
         self.assertEqual(response.sample_count, 12)
         self.assertTrue(response.is_active)
@@ -438,16 +600,18 @@ class OuladDropoutTrainingScriptTests(unittest.IsolatedAsyncioTestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             data_dir = write_minimal_oulad_dataset(root / "oulad")
-            model_dir = root / "models" / "dropout-risk"
+            client = FakeMinioClient()
 
             response = await train_oulad_dropout_model(
                 database=database,
                 data_dir=data_dir,
-                model_dir=model_dir,
+                artifact_client=client,
+                artifact_bucket="ai-models",
+                temp_dir=root / "tmp-artifacts",
             )
 
-            artifact_path = Path(response.artifact_path)
-            self.assertTrue(artifact_path.exists())
+            self.assertTrue(response.artifact_path.startswith("minio://ai-models/"))
+            self.assertEqual(client.fput_object_calls[0][0], "ai-models")
 
         self.assertEqual(response.model_version, DROPOUT_OULAD_MODEL_VERSION)
         self.assertEqual(response.feature_version, "dropout_features_v1")
@@ -503,6 +667,11 @@ class DropoutRiskApiTests(unittest.TestCase):
             ai_token = None
             dropout_model_dir = "models/dropout-risk"
             dropout_min_training_samples = 10
+            minio_endpoint = "http://localhost:9000"
+            minio_access_key = "minioadmin"
+            minio_secret_key = "minioadmin"
+            minio_secure = False
+            dropout_model_cache_dir = "/var/cache/ai-models"
 
         app.dependency_overrides[get_ai_settings] = lambda: Settings()
 
@@ -511,6 +680,11 @@ class DropoutRiskApiTests(unittest.TestCase):
             ai_token = "secret"
             dropout_model_dir = "models/dropout-risk"
             dropout_min_training_samples = 10
+            minio_endpoint = "http://localhost:9000"
+            minio_access_key = "minioadmin"
+            minio_secret_key = "minioadmin"
+            minio_secure = False
+            dropout_model_cache_dir = "/var/cache/ai-models"
 
         app.dependency_overrides[get_ai_settings] = lambda: Settings()
 
@@ -545,7 +719,11 @@ class DropoutRiskApiTests(unittest.TestCase):
                 "trainedAt": trained_at,
                 "sampleCount": 12,
                 "metrics": {"mae": 1.0, "rmse": 2.0},
-                "artifactPath": "models/dropout-risk/dropout-xgb-v1/model.json",
+                "artifactStorage": "minio",
+                "artifactBucket": "ai-models",
+                "artifactObjectKey": "dropout-risk/dropout-xgb-v1/model.json",
+                "artifactEtag": "unit-etag",
+                "artifactPath": "minio://ai-models/dropout-risk/dropout-xgb-v1/model.json",
                 "isActive": True,
             }
 
@@ -555,12 +733,17 @@ class DropoutRiskApiTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["modelVersion"], "dropout-xgb-v1")
+        self.assertEqual(response.json()["artifactStorage"], "minio")
+        self.assertEqual(response.json()["artifactBucket"], "ai-models")
 
     def test_predict_returns_model_response_when_services_are_mocked(self) -> None:
         self.allow_without_token()
         metadata = {
             "modelVersion": "dropout-xgb-v1",
-            "artifactPath": "models/dropout-risk/dropout-xgb-v1/model.json",
+            "artifactStorage": "minio",
+            "artifactBucket": "ai-models",
+            "artifactObjectKey": "dropout-risk/dropout-xgb-v1/model.json",
+            "artifactPath": "minio://ai-models/dropout-risk/dropout-xgb-v1/model.json",
         }
         model = Mock()
         model.predict.return_value = [82.4]
@@ -572,17 +755,24 @@ class DropoutRiskApiTests(unittest.TestCase):
 
         app.dependency_overrides[get_dropout_database] = lambda: FakeDatabase([])
         with patch("app.api.dropout_risk.get_active_model_metadata", new=fake_active_model):
-            with patch("app.api.dropout_risk.load_xgboost_model", return_value=model):
-                with patch("app.api.dropout_risk.create_tree_explainer", return_value=explainer):
-                    response = TestClient(app).post(
-                        "/analytics/dropout-risk/predict",
-                        json={
-                            "learnerId": "learner-1",
-                            "courseId": "course-1",
-                            "snapshotId": None,
-                            "features": valid_features(),
-                        },
-                    )
+            with patch(
+                "app.api.dropout_risk.resolve_model_artifact_path",
+                return_value=Path("/cache/model.json"),
+            ):
+                with patch("app.api.dropout_risk.load_xgboost_model", return_value=model):
+                    with patch(
+                        "app.api.dropout_risk.create_tree_explainer",
+                        return_value=explainer,
+                    ):
+                        response = TestClient(app).post(
+                            "/analytics/dropout-risk/predict",
+                            json={
+                                "learnerId": "learner-1",
+                                "courseId": "course-1",
+                                "snapshotId": None,
+                                "features": valid_features(),
+                            },
+                        )
 
         self.assertEqual(response.status_code, 200)
         body = response.json()

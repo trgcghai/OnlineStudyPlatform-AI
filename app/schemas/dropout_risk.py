@@ -63,5 +63,9 @@ class ActiveDropoutModelResponse(BaseModel):
     trained_at: datetime = Field(alias="trainedAt")
     sample_count: int = Field(alias="sampleCount")
     metrics: dict[str, float]
+    artifact_storage: str = Field(alias="artifactStorage")
+    artifact_bucket: str = Field(alias="artifactBucket")
+    artifact_object_key: str = Field(alias="artifactObjectKey")
+    artifact_etag: str | None = Field(default=None, alias="artifactEtag")
     artifact_path: str = Field(alias="artifactPath")
     is_active: bool = Field(alias="isActive")

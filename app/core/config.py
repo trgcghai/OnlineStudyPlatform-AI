@@ -98,6 +98,27 @@ class AiSettings(BaseSettings):
         default=10,
         validation_alias="DROPOUT_MIN_TRAINING_SAMPLES",
     )
+    minio_endpoint: str = Field(
+        default="http://localhost:9000",
+        validation_alias="MINIO_ENDPOINT",
+    )
+    minio_access_key: str = Field(
+        default="minioadmin",
+        validation_alias="MINIO_ACCESS_KEY",
+    )
+    minio_secret_key: str = Field(
+        default="minioadmin",
+        validation_alias="MINIO_SECRET_KEY",
+    )
+    minio_bucket_ai_models: str = Field(
+        default="ai-models",
+        validation_alias="MINIO_BUCKET_AI_MODELS",
+    )
+    minio_secure: bool = Field(default=False, validation_alias="MINIO_SECURE")
+    dropout_model_cache_dir: str = Field(
+        default="/var/cache/ai-models",
+        validation_alias="DROPOUT_MODEL_CACHE_DIR",
+    )
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 

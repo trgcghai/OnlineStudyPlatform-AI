@@ -17,12 +17,14 @@ COPY pyproject.toml uv.lock ./
 RUN uv sync --frozen --no-dev
 
 COPY app ./app
+COPY scripts ./scripts
+COPY data ./data
 COPY main.py ./
 
 RUN groupadd --system --gid 1001 app \
     && useradd --system --uid 1001 --gid app --home-dir /app app \
-    && mkdir -p /var/cache/huggingface /var/cache/embeddings \
-    && chown -R app:app /app /var/cache/huggingface /var/cache/embeddings
+    && mkdir -p /var/cache/huggingface /var/cache/embeddings /var/cache/ai-models \
+    && chown -R app:app /app /var/cache/huggingface /var/cache/embeddings /var/cache/ai-models
 
 USER app
 ENV PATH="/app/.venv/bin:$PATH"

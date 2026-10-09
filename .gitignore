@@ -28,6 +28,9 @@ CACHEDIR.TAG
 # Generated ML artifacts are stored in MinIO, not source control.
 models/
 
+# Large training datasets are local inputs, not source control.
+data/
+
 # Local logs, IDE settings, and operating-system metadata.
 *.log
 .idea/

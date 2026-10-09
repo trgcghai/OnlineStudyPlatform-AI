@@ -9,6 +9,7 @@ from app.core.config import get_ai_settings
 from app.db.mongo import get_mongo_database
 from app.ml.dropout_constants import DROPOUT_KAGGLE_MODEL_VERSION
 from app.schemas.dropout_risk import ActiveDropoutModelResponse
+from app.services.model_artifact_store import create_minio_client
 from app.services.dropout_model_registry import register_dropout_model
 from app.services.kaggle_dropout_dataset import load_kaggle_dropout_samples
 
@@ -25,7 +26,9 @@ DEFAULT_KAGGLE_CSV_PATH = (
 async def train_kaggle_dropout_model(
     database: object,
     csv_path: Path,
-    model_dir: Path,
+    artifact_client: object,
+    artifact_bucket: str,
+    temp_dir: Path,
 ) -> ActiveDropoutModelResponse:
     matrix, targets = load_kaggle_dropout_samples(csv_path)
     sample_count = int(targets.shape[0])
@@ -55,7 +58,9 @@ async def train_kaggle_dropout_model(
     return await register_dropout_model(
         database=database,
         model=model,
-        model_dir=model_dir,
+        artifact_client=artifact_client,
+        artifact_bucket=artifact_bucket,
+        temp_dir=temp_dir,
         model_version=DROPOUT_KAGGLE_MODEL_VERSION,
         sample_count=sample_count,
         metrics=metrics,
@@ -68,10 +73,18 @@ async def train_kaggle_dropout_model(
 
 async def main() -> None:
     settings = get_ai_settings()
+    artifact_client = create_minio_client(
+        settings.minio_endpoint,
+        settings.minio_access_key,
+        settings.minio_secret_key,
+        settings.minio_secure,
+    )
     response = await train_kaggle_dropout_model(
         database=get_mongo_database(),
         csv_path=DEFAULT_KAGGLE_CSV_PATH,
-        model_dir=Path(settings.dropout_model_dir),
+        artifact_client=artifact_client,
+        artifact_bucket=settings.minio_bucket_ai_models,
+        temp_dir=Path(settings.dropout_model_cache_dir) / "training-artifacts",
     )
     print(
         "Trained Kaggle dropout model "

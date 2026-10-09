@@ -25,6 +25,9 @@ venv/
 models--*/
 CACHEDIR.TAG
 
+# Generated ML artifacts are stored in MinIO, not source control.
+models/
+
 # Local logs, IDE settings, and operating-system metadata.
 *.log
 .idea/

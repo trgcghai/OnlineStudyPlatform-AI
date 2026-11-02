@@ -86,12 +86,12 @@
 - `AiSummarizeResponse.provider` accepts the literal `"9router"`.
 - `DEFAULT_AI_SUMMARIZE_TIMEOUT_MS` becomes `900_000` (15 minutes); leave `DEFAULT_AI_TRANSCRIBE_TIMEOUT_MS` unchanged.
 
-- [ ] **Step 1: Add a client test accepting `{ summary: "...", provider: "9router" }` and update the invalid-response test to continue rejecting empty summary/unknown provider values.
-- [ ] **Step 2: Assert the `/summarize` request uses the 900,000 ms timeout and `/transcribe` retains its current timeout.
+- [x] **Step 1: Add a client test accepting `{ summary: "...", provider: "9router" }` and update the invalid-response test to continue rejecting empty summary/unknown provider values.
+- [x] **Step 2: Assert the `/summarize` request uses the 900,000 ms timeout and `/transcribe` retains its current timeout.
 - [ ] **Step 3: Run the focused NestJS test** from `online-study-platform-be/` using `pnpm test --runInBand -- ai-summary.client.spec.ts`; expect it to fail before the DTO/timeout update.
-- [ ] **Step 4: Update the response type/validator and summary timeout only**; do not alter the transcription client or RAG API.
+- [x] **Step 4: Update the response type/validator and summary timeout only**; do not alter the transcription client or RAG API.
 - [ ] **Step 5: Re-run the focused NestJS test** and expect it to pass.
-- [ ] **Step 6: Commit backend changes** with `feat: accept 9router lesson summary responses`.
+- [x] **Step 6: Commit backend changes** with `feat: accept 9router lesson summary responses`.
 
 ### Task 4: Wire summary configuration and verify deployment
 
@@ -108,12 +108,12 @@
 - Pass both summary settings to the AI Compose service.
 - Remove `SUMMARY_PROVIDER` from AI settings/examples/Compose; retain `GEMINI_API_KEY`, `GEMINI_MODEL`, and `LLM_PROVIDER` for RAG.
 
-- [ ] **Step 1: Update AI/root environment examples and AI README**, removing only the obsolete summary-provider selector and adding the dedicated summary model/timeout entries; document that lesson summaries use 9Router and preserve Gemini settings/documentation for RAG.
-- [ ] **Step 2: Update root Compose** to pass the two summary settings only to the AI service and remove the old `SUMMARY_PROVIDER` mapping.
-- [ ] **Step 3: Verify Compose without printing resolved values** using `docker compose --env-file .env.example config -q` from the workspace root.
-- [ ] **Step 4: Search AI/root source and examples** to ensure summary code no longer depends on Gemini while RAG still uses `generate_gemini_answer`; confirm there are no active `.env` edits.
+- [x] **Step 1: Update AI/root environment examples and AI README**, removing only the obsolete summary-provider selector and adding the dedicated summary model/timeout entries; document that lesson summaries use 9Router and preserve Gemini settings/documentation for RAG.
+- [x] **Step 2: Update root Compose** to pass the two summary settings only to the AI service and remove the old `SUMMARY_PROVIDER` mapping.
+- [x] **Step 3: Verify Compose without printing resolved values** using `docker compose --env-file .env.example config -q` from the workspace root.
+- [x] **Step 4: Search AI/root source and examples** to ensure summary code no longer depends on Gemini while RAG still uses `generate_gemini_answer`; confirm there are no active `.env` edits.
 - [ ] **Step 5: Run AI suite** using `uv run python -m unittest discover tests` from the AI repo (with `AI_TOKEN` cleared only for the test process if the local `.env` affects unrelated tests), then rerun focused NestJS coverage.
-- [ ] **Step 6: Commit AI example/config changes**, then commit root example/Compose changes and the AI/BE submodule pointers on the existing root feature branch; stage only intended hunks so pre-existing root edits remain unstaged.
+- [x] **Step 6: Commit AI example/config changes**, then commit root example/Compose changes and the AI/BE submodule pointers on the existing root feature branch; stage only intended hunks so pre-existing root edits remain unstaged.
 
 ## Execution Notes
 
@@ -121,3 +121,9 @@
 - The summary model ID must be one returned by the deployed 9Router chat model list; it is independent of the STT model ID.
 - Never edit or display the active `.env` values. Compose validation uses `.env.example` and `config -q` only.
 - Before execution, verify AI, backend, and root branches are not `main`; preserve all pre-existing changes and do not use git worktrees.
+
+### Execution results
+
+- AI suite passed: 104 tests. Compose validation passed with warnings for unrelated optional variables missing from `.env.example`.
+- NestJS focused tests could not execute because the BE worktree has no installed Jest binary and pnpm package fetches failed with `ECONNREFUSED`. The test changes cover 9Router provider acceptance, unknown-provider rejection, a 900,000 ms summary timeout, and the unchanged 1,800,000 ms transcription timeout.
+- AI/BE submodule changes and root config/pointer changes are committed. The active `.env` was not edited.

@@ -7,6 +7,22 @@ from tempfile import TemporaryDirectory
 
 
 class SettingsTests(unittest.TestCase):
+    def test_ai_settings_accept_9router_summary_model_and_timeout(self) -> None:
+        from pydantic import ValidationError
+
+        from app.core.config import AiSettings
+
+        settings = AiSettings(
+            NINEROUTER_SUMMARY_MODEL="free-chat-route",
+            NINEROUTER_SUMMARY_TIMEOUT_SECONDS=120,
+        )
+
+        self.assertEqual(getattr(settings, "ninerouter_summary_model", None), "free-chat-route")
+        self.assertEqual(getattr(settings, "ninerouter_summary_timeout_seconds", None), 120)
+        self.assertEqual(getattr(AiSettings(), "ninerouter_summary_timeout_seconds", None), 120)
+        with self.assertRaises(ValidationError):
+            AiSettings(NINEROUTER_SUMMARY_TIMEOUT_SECONDS=0)
+
     def test_ai_settings_accept_9router_configuration_and_positive_timeout(self) -> None:
         from pydantic import ValidationError
 

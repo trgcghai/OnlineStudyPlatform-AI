@@ -44,6 +44,14 @@ class AiSettings(BaseSettings):
     ninerouter_stt_model: str = Field(
         default="", validation_alias="NINEROUTER_STT_MODEL"
     )
+    ninerouter_summary_model: str = Field(
+        default="", validation_alias="NINEROUTER_SUMMARY_MODEL"
+    )
+    ninerouter_summary_timeout_seconds: float = Field(
+        default=120,
+        gt=0,
+        validation_alias="NINEROUTER_SUMMARY_TIMEOUT_SECONDS",
+    )
     ninerouter_language: str = Field(
         default="vi", validation_alias="NINEROUTER_LANGUAGE"
     )

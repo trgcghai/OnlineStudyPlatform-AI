@@ -40,4 +40,5 @@ Add AI settings and example values for the 9Router base URL, optional API key, r
 
 ## Implementation scope
 
-Expected files: `online-study-platform-AI/app/core/config.py`, `online-study-platform-AI/app/services/transcription.py`, `online-study-platform-AI/app/api/summary.py` only if response adaptation requires it, `online-study-platform-AI/pyproject.toml` and its lockfile, `online-study-platform-AI/.env.example`, root `.env.example`, and root `docker-compose.yml`.
+Expected files: FastAPI config/transcription and tests; AI `pyproject.toml` and `uv.lock`; AI `.env.example` and `Dockerfile`; root `.env.example` and `docker-compose.yml`. Remove the Whisper cache directory and volume alongside the model dependency.
+

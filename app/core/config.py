@@ -30,7 +30,6 @@ class AiSettings(BaseSettings):
     gemini_timeout_seconds: float = Field(
         default=30, validation_alias="GEMINI_TIMEOUT_SECONDS"
     )
-    summary_provider: str = Field(default="auto", validation_alias="SUMMARY_PROVIDER")
     summary_chunk_size: int = Field(
         default=6000, ge=500, le=30000, validation_alias="SUMMARY_CHUNK_SIZE"
     )

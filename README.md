@@ -12,10 +12,15 @@ dung lượng/host rồi gửi audio multipart đến endpoint transcription c�
 tại trong pipeline và được gửi đến `POST /summarize`; transcript không được lưu
 làm nội dung tóm tắt.
 
-`POST /summarize` bắt buộc dùng Gemini để biên tập lại nội dung thành tiếng Việt
-tự nhiên với ba phần `Tổng quan`, `Nội dung chính`, `Kết luận và ghi nhớ`. Kết quả
-thiếu cấu trúc hoặc lỗi Gemini sẽ trả lỗi để BullMQ retry; dịch vụ không rơi về
-việc cắt ghép câu transcript.
+`POST /summarize` gửi transcript đến chat-completions API của 9Router, sử dụng
+model cấu hình qua `NINEROUTER_SUMMARY_MODEL`. Mỗi lời gọi có timeout riêng được
+cấu hình qua `NINEROUTER_SUMMARY_TIMEOUT_SECONDS` (mặc định 120 giây). Nội dung
+được biên tập thành tiếng Việt với ba phần `Tổng quan`, `Nội dung chính`,
+`Kết luận và ghi nhớ`. Lỗi từ 9Router hoặc kết quả thiếu cấu trúc sẽ trả lỗi để
+BullMQ retry; dịch vụ không rơi về việc cắt ghép câu transcript.
+
+Chat RAG vẫn dùng Gemini trực tiếp; cấu hình `LLM_PROVIDER`, `GEMINI_API_KEY` và
+`GEMINI_MODEL` chỉ phục vụ luồng chat này.
 
 Ví dụ yêu cầu phiên âm:
 

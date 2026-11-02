@@ -250,7 +250,9 @@ Chủ đề bài học.
 
 - Một ý chính.
 """
-        with self.assertRaisesRegex(SummarizationError, "required structure"):
+        with self.assertRaisesRegex(
+            SummarizationError, "Summary is missing the required structure"
+        ):
             validate_summary(out_of_order, "Nguồn bài học.")
 
     def test_summary_rejects_empty_section(self) -> None:
@@ -258,14 +260,16 @@ Chủ đề bài học.
             "Bài học giới thiệu Dependency Injection và vai trò của cơ chế này trong ứng dụng.",
             "",
         )
-        with self.assertRaisesRegex(SummarizationError, "empty section"):
+        with self.assertRaisesRegex(SummarizationError, "Summary contains an empty section"):
             validate_summary(empty_section, "Nguồn bài học.")
 
     def test_summary_requires_main_content_bullets(self) -> None:
         no_bullets = VALID_SUMMARY.replace("- Dependency Injection", "Dependency Injection").replace(
             "- Constructor injection", "Constructor injection"
         )
-        with self.assertRaisesRegex(SummarizationError, "no main-content bullet"):
+        with self.assertRaisesRegex(
+            SummarizationError, "Summary has no main-content bullet points"
+        ):
             validate_summary(no_bullets, "Nguồn bài học.")
 
     async def test_empty_transcript_is_rejected_before_router_call(self) -> None:

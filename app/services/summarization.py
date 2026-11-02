@@ -151,19 +151,19 @@ def validate_summary(summary: str, transcript: str) -> str:
     validated = _strip_markdown_fence(summary)
     positions = [validated.find(heading) for heading in REQUIRED_HEADINGS]
     if any(position < 0 for position in positions) or positions != sorted(positions):
-        raise SummarizationError("Gemini summary is missing the required structure")
+        raise SummarizationError("Summary is missing the required structure")
 
     for index, heading in enumerate(REQUIRED_HEADINGS):
         start = positions[index] + len(heading)
         end = positions[index + 1] if index + 1 < len(positions) else len(validated)
         if not validated[start:end].strip():
-            raise SummarizationError("Gemini summary contains an empty section")
+            raise SummarizationError("Summary contains an empty section")
 
     main_start = positions[1] + len(MAIN_CONTENT_HEADING)
     main_end = positions[2]
     main_section = validated[main_start:main_end]
     if not BULLET_PATTERN.search(main_section):
-        raise SummarizationError("Gemini summary has no main-content bullet points")
+        raise SummarizationError("Summary has no main-content bullet points")
 
     normalized_main = BULLET_PATTERN.sub(
         lambda match: f"- {match.group(1).strip()}",

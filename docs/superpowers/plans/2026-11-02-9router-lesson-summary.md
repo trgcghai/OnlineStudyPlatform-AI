@@ -65,14 +65,14 @@
 - `summarize_transcript(title, transcript, settings) -> SummaryResult` returns `provider="9router"`.
 - Keep `app/services/llm.py` and `generate_gemini_answer` behavior unchanged for RAG.
 
-- [ ] **Step 1: Update summary tests to expect 9Router**; mock the new adapter for one-chunk and multi-chunk transcripts and assert calls use the final-summary prompt and every notes prompt in order with `summary_max_output_tokens`; update the `/summarize` API test to expect `provider: "9router"`.
-- [ ] **Step 2: Add a test that summary adapter failures become `SummarizationError`** and that no Gemini helper is called as fallback.
-- [ ] **Step 3: Add/adjust tests for empty transcript and required summary structure failures** (missing/out-of-order headings, empty section, missing main-content bullets, transcript echoed back).
-- [ ] **Step 4: Add `tests/test_llm.py` coverage that `generate_gemini_answer` still delegates to the Gemini helper**, proving summary routing did not change RAG behavior.
-- [ ] **Step 5: Run the summary and LLM tests and confirm new expectations fail before implementation** using `uv run python -m pytest tests/test_summary.py tests/test_llm.py -q -p no:cacheprovider`.
-- [ ] **Step 6: Replace the summary path with `generate_ninerouter_text`**, retain chunking/prompts/validation, translate `NineRouterSummaryError` to `SummarizationError("9Router could not generate a summary")`, remove the `SUMMARY_PROVIDER`/Gemini-key guard from summary generation, and return provider `9router`.
-- [ ] **Step 7: Run focused summary/LLM tests** with the same command; expect all tests to pass, including existing `/chat` behavior tests if run.
-- [ ] **Step 8: Commit AI summary integration/tests** with `feat: generate lesson summaries through 9router`.
+- [x] **Step 1: Update summary tests to expect 9Router**; mock the new adapter for one-chunk and multi-chunk transcripts and assert calls use the final-summary prompt and every notes prompt in order with `summary_max_output_tokens`; update the `/summarize` API test to expect `provider: "9router"`.
+- [x] **Step 2: Add a test that summary adapter failures become `SummarizationError`** and that no Gemini helper is called as fallback.
+- [x] **Step 3: Add/adjust tests for empty transcript and required summary structure failures** (missing/out-of-order headings, empty section, missing main-content bullets, transcript echoed back).
+- [x] **Step 4: Add `tests/test_llm.py` coverage that `generate_gemini_answer` still delegates to the Gemini helper**, proving summary routing did not change RAG behavior.
+- [x] **Step 5: Run the summary and LLM tests and confirm new expectations fail before implementation** using `uv run python -m pytest tests/test_summary.py tests/test_llm.py -q -p no:cacheprovider`.
+- [x] **Step 6: Replace the summary path with `generate_ninerouter_text`**, retain chunking/prompts/validation, translate `NineRouterSummaryError` to `SummarizationError("9Router could not generate a summary")`, remove the `SUMMARY_PROVIDER`/Gemini-key guard from summary generation, and return provider `9router`.
+- [x] **Step 7: Run focused summary/LLM tests** with the same command; expect all tests to pass, including existing `/chat` behavior tests if run.
+- [x] **Step 8: Commit AI summary integration/tests** with `feat: generate lesson summaries through 9router`.
 
 ### Task 3: Update the NestJS summary response contract and timeout
 

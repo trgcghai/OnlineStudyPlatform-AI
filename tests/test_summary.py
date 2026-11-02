@@ -11,10 +11,12 @@ from fastapi.testclient import TestClient
 from app.core.config import AiSettings, get_ai_settings
 from app.main import app
 from app.services.llm import call_gemini
+from app.services.ninerouter import NineRouterSummaryError
 from app.services.summarization import (
     SummarizationError,
     SummaryResult,
     build_final_summary_prompt,
+    build_notes_prompt,
     chunk_transcript,
     summarize_transcript,
     validate_summary,
@@ -95,7 +97,7 @@ class SummaryApiTests(unittest.TestCase):
         ) as summarize_transcript_mock:
             summarize_transcript_mock.return_value = SummaryResult(
                 summary=VALID_SUMMARY,
-                provider="gemini",
+                provider="9router",
             )
             response = TestClient(app).post(
                 "/summarize",
@@ -107,7 +109,7 @@ class SummaryApiTests(unittest.TestCase):
             )
 
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json()["provider"], "gemini")
+        self.assertEqual(response.json()["provider"], "9router")
 
     def test_summary_endpoints_reject_invalid_token(self) -> None:
         app.dependency_overrides[get_ai_settings] = lambda: AiSettings(
@@ -163,22 +165,23 @@ class SummarizationTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("## Nội dung chính", prompt)
         self.assertIn("## Kết luận và ghi nhớ", prompt)
 
-    def test_chunk_transcript_splits_unpunctuated_whisper_text(self) -> None:
+    def test_chunk_transcript_splits_unpunctuated_transcript_text(self) -> None:
         transcript = "nội dung bài giảng " * 80
         chunks = chunk_transcript(transcript, 500)
 
         self.assertGreater(len(chunks), 1)
         self.assertTrue(all(len(chunk) <= 500 for chunk in chunks))
 
-    async def test_short_transcript_returns_only_validated_gemini_output(self) -> None:
+    async def test_short_transcript_returns_only_validated_9router_output(self) -> None:
         settings = AiSettings(
-            GEMINI_API_KEY="configured",
-            SUMMARY_PROVIDER="gemini",
+            NINEROUTER_URL="http://router",
+            NINEROUTER_SUMMARY_MODEL="free-chat-route",
         )
         with patch(
-            "app.services.summarization.generate_gemini_text",
+            "app.services.summarization.generate_ninerouter_text",
             new_callable=AsyncMock,
             return_value=VALID_SUMMARY,
+            create=True,
         ):
             result = await summarize_transcript(
                 "Dependency Injection",
@@ -186,32 +189,42 @@ class SummarizationTests(unittest.IsolatedAsyncioTestCase):
                 settings,
             )
 
-        self.assertEqual(result.provider, "gemini")
+        self.assertEqual(result.provider, "9router")
         self.assertEqual(result.summary, VALID_SUMMARY)
 
-    async def test_gemini_failure_is_not_replaced_by_extractive_transcript(self) -> None:
+    async def test_9router_failure_is_retryable_and_has_no_gemini_fallback(self) -> None:
         settings = AiSettings(
-            GEMINI_API_KEY="configured",
-            SUMMARY_PROVIDER="gemini",
+            NINEROUTER_URL="http://router",
+            NINEROUTER_SUMMARY_MODEL="free-chat-route",
         )
         with patch(
+            "app.services.summarization.generate_ninerouter_text",
+            new_callable=AsyncMock,
+            side_effect=NineRouterSummaryError("request failed"),
+            create=True,
+        ), patch(
             "app.services.summarization.generate_gemini_text",
             new_callable=AsyncMock,
-            return_value=None,
-        ):
+            create=True,
+        ) as gemini:
             with self.assertRaisesRegex(SummarizationError, "could not generate"):
                 await summarize_transcript(
                     "Dependency Injection",
                     "Dependency Injection cung cấp dependency cho lớp.",
                     settings,
                 )
+        gemini.assert_not_awaited()
 
-    async def test_invalid_gemini_structure_is_rejected(self) -> None:
-        settings = AiSettings(GEMINI_API_KEY="configured")
+    async def test_invalid_9router_structure_is_rejected(self) -> None:
+        settings = AiSettings(
+            NINEROUTER_URL="http://router",
+            NINEROUTER_SUMMARY_MODEL="free-chat-route",
+        )
         with patch(
-            "app.services.summarization.generate_gemini_text",
+            "app.services.summarization.generate_ninerouter_text",
             new_callable=AsyncMock,
             return_value="Dependency Injection cung cấp dependency cho lớp.",
+            create=True,
         ):
             with self.assertRaisesRegex(SummarizationError, "required structure"):
                 await summarize_transcript(
@@ -224,6 +237,47 @@ class SummarizationTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaisesRegex(SummarizationError, "instead of a summary"):
             validate_summary(VALID_SUMMARY, VALID_SUMMARY)
 
+    def test_summary_rejects_out_of_order_headings(self) -> None:
+        out_of_order = """## Tổng quan
+
+Chủ đề bài học.
+
+## Kết luận và ghi nhớ
+
+Điều cần ghi nhớ.
+
+## Nội dung chính
+
+- Một ý chính.
+"""
+        with self.assertRaisesRegex(SummarizationError, "required structure"):
+            validate_summary(out_of_order, "Nguồn bài học.")
+
+    def test_summary_rejects_empty_section(self) -> None:
+        empty_section = VALID_SUMMARY.replace(
+            "Bài học giới thiệu Dependency Injection và vai trò của cơ chế này trong ứng dụng.",
+            "",
+        )
+        with self.assertRaisesRegex(SummarizationError, "empty section"):
+            validate_summary(empty_section, "Nguồn bài học.")
+
+    def test_summary_requires_main_content_bullets(self) -> None:
+        no_bullets = VALID_SUMMARY.replace("- Dependency Injection", "Dependency Injection").replace(
+            "- Constructor injection", "Constructor injection"
+        )
+        with self.assertRaisesRegex(SummarizationError, "no main-content bullet"):
+            validate_summary(no_bullets, "Nguồn bài học.")
+
+    async def test_empty_transcript_is_rejected_before_router_call(self) -> None:
+        with patch(
+            "app.services.summarization.generate_ninerouter_text",
+            new_callable=AsyncMock,
+            create=True,
+        ) as generate:
+            with self.assertRaisesRegex(SummarizationError, "Transcript is empty"):
+                await summarize_transcript("Bài học", " \n ", AiSettings())
+        generate.assert_not_awaited()
+
     def test_valid_summary_normalizes_common_markdown_bullet_styles(self) -> None:
         star_bullets = VALID_SUMMARY.replace("- Dependency", "* Dependency").replace(
             "- Constructor", "2. Constructor"
@@ -234,18 +288,10 @@ class SummarizationTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("- Dependency", result)
         self.assertIn("- Constructor", result)
 
-    async def test_missing_gemini_key_is_a_retryable_summary_error(self) -> None:
-        with self.assertRaisesRegex(SummarizationError, "API key"):
-            await summarize_transcript(
-                "Bài học",
-                "Nội dung bài học có thông tin.",
-                AiSettings(GEMINI_API_KEY=None),
-            )
-
-    async def test_long_transcript_uses_notes_then_final_gemini_call(self) -> None:
+    async def test_long_transcript_uses_notes_then_final_9router_call(self) -> None:
         settings = AiSettings(
-            GEMINI_API_KEY="configured",
-            SUMMARY_PROVIDER="gemini",
+            NINEROUTER_URL="http://router",
+            NINEROUTER_SUMMARY_MODEL="free-chat-route",
             SUMMARY_CHUNK_SIZE=500,
         )
         transcript = " ".join(
@@ -258,8 +304,9 @@ class SummarizationTests(unittest.IsolatedAsyncioTestCase):
         )
         chunks = chunk_transcript(transcript, settings.summary_chunk_size)
         with patch(
-            "app.services.summarization.generate_gemini_text",
+            "app.services.summarization.generate_ninerouter_text",
             new_callable=AsyncMock,
+            create=True,
         ) as generate:
             generate.side_effect = [
                 *["- Ghi chú sự kiện quan trọng."] * len(chunks),
@@ -267,8 +314,29 @@ class SummarizationTests(unittest.IsolatedAsyncioTestCase):
             ]
             result = await summarize_transcript("Bài học", transcript, settings)
 
-        self.assertEqual(result.provider, "gemini")
+        self.assertEqual(result.provider, "9router")
         self.assertEqual(generate.await_count, len(chunks) + 1)
+        self.assertEqual(
+            [call.args[0] for call in generate.await_args_list[:-1]],
+            [
+                build_notes_prompt("Bài học", chunk, index, len(chunks))
+                for index, chunk in enumerate(chunks, start=1)
+            ],
+        )
+        self.assertEqual(
+            generate.await_args_list[-1].args[0],
+            build_final_summary_prompt(
+                "Bài học",
+                "\n\n".join(["- Ghi chú sự kiện quan trọng."] * len(chunks)),
+                "GHI_CHU_DA_TRICH_XUAT",
+            ),
+        )
+        self.assertTrue(
+            all(
+                call.kwargs["max_output_tokens"] == settings.summary_max_output_tokens
+                for call in generate.await_args_list
+            )
+        )
 
 
 class _FakeDownloadResponse:

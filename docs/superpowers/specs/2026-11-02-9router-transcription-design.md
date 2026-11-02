@@ -28,7 +28,7 @@ Add AI settings and example values for the 9Router base URL, optional API key, r
 
 ## Removal and retained pieces
 
-- Remove faster-whisper model loading, local transcription functions, Whisper-only environment settings, and the `faster-whisper` dependency/lockfile entries if unused elsewhere.
+- Remove faster-whisper model loading, local transcription functions, Whisper-only environment settings, the `faster-whisper` dependency, and the unused direct `av` dependency/lockfile entries.
 - Retain FastAPI's guarded media download, size/time limits, safe redirect checks, temporary-file cleanup, and transcription result type/endpoint contract.
 - Retain NestJS FFmpeg extraction, summary queue/retries, transcript and summary storage, and Gemini summarization.
 

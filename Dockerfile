@@ -23,8 +23,8 @@ COPY main.py ./
 
 RUN groupadd --system --gid 1001 app \
     && useradd --system --uid 1001 --gid app --home-dir /app app \
-    && mkdir -p /var/cache/huggingface /var/cache/embeddings /var/cache/ai-models \
-    && chown -R app:app /app /var/cache/huggingface /var/cache/embeddings /var/cache/ai-models
+    && mkdir -p /var/cache/embeddings /var/cache/ai-models \
+    && chown -R app:app /app /var/cache/embeddings /var/cache/ai-models
 
 USER app
 ENV PATH="/app/.venv/bin:$PATH"

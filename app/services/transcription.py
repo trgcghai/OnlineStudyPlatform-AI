@@ -1,13 +1,16 @@
 import asyncio
+import math
+import mimetypes
 import os
 import tempfile
-import threading
 import urllib.error
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+
+import httpx
 
 from app.core.config import AiSettings
 
@@ -106,47 +109,64 @@ def download_media(url: str, settings: AiSettings) -> str:
     return temporary_path
 
 
-_model_lock = threading.Lock()
-_model_cache: dict[tuple[str, str, str], Any] = {}
-
-
-def get_whisper_model(settings: AiSettings) -> Any:
-    key = (
-        settings.whisper_model,
-        settings.whisper_device,
-        settings.whisper_compute_type,
-    )
-    with _model_lock:
-        if key not in _model_cache:
-            from faster_whisper import WhisperModel
-
-            _model_cache[key] = WhisperModel(
-                settings.whisper_model,
-                device=settings.whisper_device,
-                compute_type=settings.whisper_compute_type,
-                download_root=settings.whisper_download_root,
-            )
-        return _model_cache[key]
-
-
 def transcribe_file(path: str, settings: AiSettings) -> TranscriptionResult:
-    model = get_whisper_model(settings)
-    segments, info = model.transcribe(
-        path,
-        language=settings.whisper_language,
-        vad_filter=True,
-        beam_size=5,
-    )
-    transcript = " ".join(
-        segment.text.strip() for segment in segments if segment.text.strip()
-    ).strip()
-    if not transcript:
-        raise TranscriptionError("Whisper returned an empty transcript")
+    base_url = settings.ninerouter_url.strip().rstrip("/")
+    model = settings.ninerouter_stt_model.strip()
+    if not base_url or not model:
+        raise TranscriptionError("9Router URL and STT model must be configured")
 
-    language = str(getattr(info, "language", settings.whisper_language))
-    duration = float(getattr(info, "duration", 0) or 0)
+    parsed_url = urllib.parse.urlparse(base_url)
+    if parsed_url.scheme not in {"http", "https"} or not parsed_url.netloc:
+        raise TranscriptionError("9Router URL must use HTTP or HTTPS")
+
+    endpoint = f"{base_url}/v1/audio/transcriptions"
+    headers: dict[str, str] = {}
+    api_key = settings.ninerouter_api_key
+    if api_key and api_key.strip():
+        headers["Authorization"] = f"Bearer {api_key.strip()}"
+
+    content_type = mimetypes.guess_type(path)[0] or "application/octet-stream"
+    language_hint = settings.ninerouter_language.strip() or "vi"
+    try:
+        with open(path, "rb") as audio_file:
+            response = httpx.post(
+                endpoint,
+                data={
+                    "model": model,
+                    "language": language_hint,
+                    "response_format": "verbose_json",
+                },
+                files={
+                    "file": (Path(path).name, audio_file, content_type),
+                },
+                headers=headers,
+                timeout=settings.ninerouter_timeout_seconds,
+            )
+            response.raise_for_status()
+            payload = response.json()
+    except (httpx.HTTPError, OSError) as error:
+        raise TranscriptionError("9Router transcription request failed") from error
+    except ValueError as error:
+        raise TranscriptionError("9Router returned invalid transcription JSON") from error
+
+    if not isinstance(payload, dict):
+        raise TranscriptionError("9Router returned an invalid transcription payload")
+    transcript = payload.get("text")
+    if not isinstance(transcript, str) or not transcript.strip():
+        raise TranscriptionError("9Router returned an empty transcript")
+
+    language = payload.get("language")
+    if not isinstance(language, str) or not language.strip():
+        language = language_hint
+    duration_value = payload.get("duration")
+    duration = 0.0
+    if isinstance(duration_value, (int, float)) and not isinstance(duration_value, bool):
+        parsed_duration = float(duration_value)
+        if math.isfinite(parsed_duration) and parsed_duration >= 0:
+            duration = parsed_duration
+
     return TranscriptionResult(
-        transcript=transcript,
+        transcript=transcript.strip(),
         language=language,
         duration_seconds=duration,
     )

@@ -5,6 +5,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
+import httpx
 from fastapi.testclient import TestClient
 
 from app.core.config import AiSettings, get_ai_settings
@@ -324,26 +325,141 @@ class TranscriptionTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertFalse(Path(path).exists())
 
-    def test_whisper_segments_are_joined_in_order(self) -> None:
-        model = SimpleNamespace(
-            transcribe=lambda *_args, **_kwargs: (
-                [
-                    SimpleNamespace(text=" Xin chào "),
-                    SimpleNamespace(text=" bài giảng. "),
-                ],
-                SimpleNamespace(language="vi", duration=8.5),
-            )
+    def test_transcribe_file_posts_multipart_and_maps_metadata(self) -> None:
+        audio_path = Path(__file__).resolve()
+        response = httpx.Response(
+            200,
+            json={"text": " Xin chào ", "language": "vi", "duration": 8.5},
+            request=httpx.Request("POST", "http://router/v1/audio/transcriptions"),
         )
-        with patch(
-            "app.services.transcription.get_whisper_model",
-            return_value=model,
-        ):
-            result = transcribe_file("audio.ogg", AiSettings())
+        uploaded = {}
 
-        self.assertEqual(result.transcript, "Xin chào bài giảng.")
+        def capture_request(url, **kwargs):
+            uploaded["bytes"] = kwargs["files"]["file"][1].read()
+            return response
+
+        with patch("httpx.post", side_effect=capture_request) as post:
+            result = transcribe_file(
+                str(audio_path),
+                AiSettings(
+                    NINEROUTER_URL="http://router",
+                    NINEROUTER_API_KEY="router-secret",
+                    NINEROUTER_STT_MODEL="free-stt-route",
+                    NINEROUTER_LANGUAGE="vi",
+                    NINEROUTER_TIMEOUT_SECONDS=17,
+                ),
+            )
+
+        self.assertEqual(result.transcript, "Xin chào")
+        self.assertEqual(result.language, "vi")
         self.assertEqual(result.duration_seconds, 8.5)
+        post.assert_called_once()
+        self.assertEqual(post.call_args.args[0], "http://router/v1/audio/transcriptions")
+        kwargs = post.call_args.kwargs
+        self.assertEqual(
+            kwargs["data"],
+            {
+                "model": "free-stt-route",
+                "language": "vi",
+                "response_format": "verbose_json",
+            },
+        )
+        self.assertEqual(kwargs["headers"]["Authorization"], "Bearer router-secret")
+        self.assertEqual(kwargs["timeout"], 17)
+        self.assertEqual(kwargs["files"]["file"][0], audio_path.name)
+        self.assertEqual(uploaded["bytes"], audio_path.read_bytes())
 
-    async def test_transcribe_audio_cleans_up_after_whisper_failure(self) -> None:
+    def test_transcribe_file_uses_defaults_when_provider_omits_metadata(self) -> None:
+        audio_path = Path(__file__).resolve()
+        response = httpx.Response(
+            200,
+            json={"text": "Nội dung bài học"},
+            request=httpx.Request("POST", "http://router/v1/audio/transcriptions"),
+        )
+        with patch("httpx.post", return_value=response) as post:
+            result = transcribe_file(
+                str(audio_path),
+                AiSettings(
+                    NINEROUTER_URL="http://router",
+                    NINEROUTER_STT_MODEL="free-stt-route",
+                    NINEROUTER_LANGUAGE="",
+                ),
+            )
+
+        self.assertEqual(result.language, "vi")
+        self.assertEqual(result.duration_seconds, 0)
+        self.assertNotIn("Authorization", post.call_args.kwargs["headers"])
+        self.assertEqual(post.call_args.kwargs["data"]["language"], "vi")
+
+    def test_transcribe_file_rejects_malformed_or_empty_payloads(self) -> None:
+        responses = [
+            httpx.Response(
+                200,
+                content=b"not-json",
+                request=httpx.Request("POST", "http://router/v1/audio/transcriptions"),
+            ),
+            httpx.Response(
+                200,
+                json={},
+                request=httpx.Request("POST", "http://router/v1/audio/transcriptions"),
+            ),
+            httpx.Response(
+                200,
+                json={"text": "   "},
+                request=httpx.Request("POST", "http://router/v1/audio/transcriptions"),
+            ),
+        ]
+        audio_path = Path(__file__).resolve()
+        for response in responses:
+            with self.subTest(response=response), patch(
+                "httpx.post", return_value=response
+            ):
+                with self.assertRaises(TranscriptionError):
+                    transcribe_file(
+                        str(audio_path),
+                        AiSettings(
+                            NINEROUTER_URL="http://router",
+                            NINEROUTER_STT_MODEL="free-stt-route",
+                        ),
+                    )
+
+    def test_transcribe_file_translates_http_and_network_failures(self) -> None:
+        audio_path = Path(__file__).resolve()
+        failures = [
+            httpx.Response(
+                503,
+                request=httpx.Request("POST", "http://router/v1/audio/transcriptions"),
+            ),
+            httpx.TimeoutException("router timeout"),
+        ]
+        for failure in failures:
+            with self.subTest(failure=failure):
+                mock_options = (
+                    {"return_value": failure}
+                    if isinstance(failure, httpx.Response)
+                    else {"side_effect": failure}
+                )
+                with patch("httpx.post", **mock_options):
+                    with self.assertRaises(TranscriptionError):
+                        transcribe_file(
+                            str(audio_path),
+                            AiSettings(
+                                NINEROUTER_URL="http://router",
+                                NINEROUTER_STT_MODEL="free-stt-route",
+                            ),
+                        )
+
+    def test_transcribe_file_requires_router_url_and_model(self) -> None:
+        audio_path = Path(__file__).resolve()
+        with patch("httpx.post") as post:
+            with self.assertRaises(TranscriptionError):
+                transcribe_file(
+                    str(audio_path),
+                    AiSettings(NINEROUTER_URL="", NINEROUTER_STT_MODEL=""),
+                )
+        post.assert_not_called()
+
+    async def test_transcribe_audio_cleans_up_after_router_failure(self) -> None:
         file_descriptor, path = tempfile.mkstemp()
         os.close(file_descriptor)
         with (
@@ -353,13 +469,22 @@ class TranscriptionTests(unittest.IsolatedAsyncioTestCase):
             ),
             patch(
                 "app.services.transcription.transcribe_file",
-                side_effect=TranscriptionError("empty transcript"),
+                side_effect=TranscriptionError("router unavailable"),
             ),
         ):
-            with self.assertRaisesRegex(TranscriptionError, "empty transcript"):
+            with self.assertRaisesRegex(TranscriptionError, "router unavailable"):
                 await transcribe_audio("http://minio/audio.ogg", AiSettings())
 
         self.assertFalse(Path(path).exists())
+
+    async def test_transcribe_audio_does_not_call_router_for_disallowed_media(self) -> None:
+        with patch("httpx.post") as post:
+            with self.assertRaisesRegex(TranscriptionError, "not allowed"):
+                await transcribe_audio(
+                    "https://example.com/audio.ogg",
+                    AiSettings(TRANSCRIBE_ALLOWED_HOSTS="minio"),
+                )
+        post.assert_not_called()
 
 
 if __name__ == "__main__":

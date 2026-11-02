@@ -37,14 +37,20 @@ class AiSettings(BaseSettings):
     summary_max_output_tokens: int = Field(
         default=2048, ge=128, le=8192, validation_alias="SUMMARY_MAX_OUTPUT_TOKENS"
     )
-    whisper_model: str = Field(default="small", validation_alias="WHISPER_MODEL")
-    whisper_device: str = Field(default="cpu", validation_alias="WHISPER_DEVICE")
-    whisper_compute_type: str = Field(
-        default="int8", validation_alias="WHISPER_COMPUTE_TYPE"
+    ninerouter_url: str = Field(default="", validation_alias="NINEROUTER_URL")
+    ninerouter_api_key: str | None = Field(
+        default=None, validation_alias="NINEROUTER_API_KEY"
     )
-    whisper_language: str = Field(default="vi", validation_alias="WHISPER_LANGUAGE")
-    whisper_download_root: str | None = Field(
-        default=None, validation_alias="WHISPER_DOWNLOAD_ROOT"
+    ninerouter_stt_model: str = Field(
+        default="", validation_alias="NINEROUTER_STT_MODEL"
+    )
+    ninerouter_language: str = Field(
+        default="vi", validation_alias="NINEROUTER_LANGUAGE"
+    )
+    ninerouter_timeout_seconds: float = Field(
+        default=1500,
+        gt=0,
+        validation_alias="NINEROUTER_TIMEOUT_SECONDS",
     )
     transcribe_max_bytes: int = Field(
         default=1_073_741_824, ge=1, validation_alias="TRANSCRIBE_MAX_BYTES"

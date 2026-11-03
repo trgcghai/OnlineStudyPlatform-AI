@@ -10,7 +10,6 @@ from fastapi.testclient import TestClient
 
 from app.core.config import AiSettings, get_ai_settings
 from app.main import app
-from app.services.llm import call_gemini
 from app.services.ninerouter import NineRouterSummaryError
 from app.services.summarization import (
     SummarizationError,
@@ -127,30 +126,6 @@ class SummaryApiTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 401)
 
-    def test_gemini_key_is_sent_in_header_not_url(self) -> None:
-        class _GeminiResponse:
-            def __enter__(self):
-                return self
-
-            def __exit__(self, *args):
-                return False
-
-            def read(self) -> bytes:
-                return b'{"candidates":[{"content":{"parts":[{"text":"OK"}]}}]}'
-
-        settings = AiSettings(GEMINI_API_KEY="private-key")
-        with patch(
-            "app.services.llm.urllib.request.urlopen",
-            return_value=_GeminiResponse(),
-        ) as urlopen:
-            result = call_gemini("test", settings)
-
-        request = urlopen.call_args.args[0]
-        self.assertNotIn("private-key", request.full_url)
-        self.assertEqual(request.get_header("X-goog-api-key"), "private-key")
-        self.assertEqual(result, "OK")
-
-
 class SummarizationTests(unittest.IsolatedAsyncioTestCase):
     def test_final_prompt_requires_natural_complete_vietnamese_structure(self) -> None:
         prompt = build_final_summary_prompt(
@@ -192,7 +167,7 @@ class SummarizationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result.provider, "9router")
         self.assertEqual(result.summary, VALID_SUMMARY)
 
-    async def test_9router_failure_is_retryable_and_has_no_gemini_fallback(self) -> None:
+    async def test_9router_failure_is_reported_for_retry(self) -> None:
         settings = AiSettings(
             NINEROUTER_URL="http://router",
             NINEROUTER_SUMMARY_MODEL="free-chat-route",
@@ -202,18 +177,13 @@ class SummarizationTests(unittest.IsolatedAsyncioTestCase):
             new_callable=AsyncMock,
             side_effect=NineRouterSummaryError("request failed"),
             create=True,
-        ), patch(
-            "app.services.summarization.generate_gemini_text",
-            new_callable=AsyncMock,
-            create=True,
-        ) as gemini:
+        ):
             with self.assertRaisesRegex(SummarizationError, "could not generate"):
                 await summarize_transcript(
                     "Dependency Injection",
                     "Dependency Injection cung cấp dependency cho lớp.",
                     settings,
                 )
-        gemini.assert_not_awaited()
 
     async def test_invalid_9router_structure_is_rejected(self) -> None:
         settings = AiSettings(

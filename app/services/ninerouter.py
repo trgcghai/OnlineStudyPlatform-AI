@@ -11,22 +11,28 @@ class NineRouterSummaryError(RuntimeError):
     pass
 
 
-async def generate_ninerouter_text(
+class NineRouterChatError(RuntimeError):
+    pass
+
+
+async def _generate_ninerouter_text(
     prompt: str,
     settings: AiSettings,
     *,
+    model: str,
+    timeout_seconds: float,
     max_output_tokens: int,
+    error_type: type[RuntimeError],
+    operation: str,
 ) -> str:
     base_url = settings.ninerouter_url.strip().rstrip("/")
-    model = settings.ninerouter_summary_model.strip()
+    model = model.strip()
     if not base_url or not model:
-        raise NineRouterSummaryError(
-            "9Router URL and summary model must be configured"
-        )
+        raise error_type(f"9Router URL and {operation} model must be configured")
 
     parsed_url = urllib.parse.urlparse(base_url)
     if parsed_url.scheme not in {"http", "https"} or not parsed_url.netloc:
-        raise NineRouterSummaryError("9Router URL must use HTTP or HTTPS")
+        raise error_type("9Router URL must use HTTP or HTTPS")
 
     headers: dict[str, str] = {}
     api_key = settings.ninerouter_api_key
@@ -41,9 +47,7 @@ async def generate_ninerouter_text(
         "max_tokens": max_output_tokens,
     }
     try:
-        async with httpx.AsyncClient(
-            timeout=settings.ninerouter_summary_timeout_seconds
-        ) as client:
+        async with httpx.AsyncClient(timeout=timeout_seconds) as client:
             response = await client.post(
                 f"{base_url}/v1/chat/completions",
                 headers=headers,
@@ -52,21 +56,53 @@ async def generate_ninerouter_text(
             response.raise_for_status()
             payload = response.json()
     except (httpx.HTTPError, OSError) as error:
-        raise NineRouterSummaryError("9Router summary request failed") from error
+        raise error_type(f"9Router {operation} request failed") from error
     except ValueError as error:
-        raise NineRouterSummaryError(
-            "9Router returned invalid summary JSON"
-        ) from error
+        raise error_type(f"9Router returned invalid {operation} JSON") from error
 
     if not isinstance(payload, dict):
-        raise NineRouterSummaryError("9Router returned an invalid summary response")
+        raise error_type(f"9Router returned an invalid {operation} response")
     choices = payload.get("choices")
     if not isinstance(choices, list) or not choices or not isinstance(choices[0], dict):
-        raise NineRouterSummaryError("9Router returned an invalid summary response")
+        raise error_type(f"9Router returned an invalid {operation} response")
     message = choices[0].get("message")
     if not isinstance(message, dict):
-        raise NineRouterSummaryError("9Router returned an invalid summary response")
+        raise error_type(f"9Router returned an invalid {operation} response")
     content = message.get("content")
     if not isinstance(content, str) or not content.strip():
-        raise NineRouterSummaryError("9Router returned empty summary content")
+        raise error_type(f"9Router returned empty {operation} content")
     return content.strip()
+
+
+async def generate_ninerouter_text(
+    prompt: str,
+    settings: AiSettings,
+    *,
+    max_output_tokens: int,
+) -> str:
+    return await _generate_ninerouter_text(
+        prompt,
+        settings,
+        model=settings.ninerouter_summary_model,
+        timeout_seconds=settings.ninerouter_summary_timeout_seconds,
+        max_output_tokens=max_output_tokens,
+        error_type=NineRouterSummaryError,
+        operation="summary",
+    )
+
+
+async def generate_ninerouter_chat_text(
+    prompt: str,
+    settings: AiSettings,
+    *,
+    max_output_tokens: int = 512,
+) -> str:
+    return await _generate_ninerouter_text(
+        prompt,
+        settings,
+        model=settings.ninerouter_chat_model,
+        timeout_seconds=settings.ninerouter_chat_timeout_seconds,
+        max_output_tokens=max_output_tokens,
+        error_type=NineRouterChatError,
+        operation="chat",
+    )

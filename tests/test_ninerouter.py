@@ -4,7 +4,12 @@ from unittest.mock import AsyncMock, patch
 import httpx
 
 from app.core.config import AiSettings
-from app.services.ninerouter import NineRouterSummaryError, generate_ninerouter_text
+from app.services.ninerouter import (
+    NineRouterChatError,
+    NineRouterSummaryError,
+    generate_ninerouter_chat_text,
+    generate_ninerouter_text,
+)
 
 
 class _AsyncClientStub:
@@ -150,6 +155,101 @@ class NineRouterSummaryAdapterTests(unittest.IsolatedAsyncioTestCase):
                             "prompt", self.settings, max_output_tokens=512
                         )
 
+
+class NineRouterChatAdapterTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self) -> None:
+        self.settings = AiSettings(
+            NINEROUTER_URL="http://router:20128/",
+            NINEROUTER_API_KEY="router-key",
+            NINEROUTER_CHAT_MODEL="free-chat-route",
+            NINEROUTER_CHAT_TIMEOUT_SECONDS=23,
+        )
+
+    async def test_posts_chat_request_and_parses_assistant_content(self) -> None:
+        client = _AsyncClientStub(
+            result=_response(payload={"choices": [{"message": {"content": "  Answer.  "}}]})
+        )
+        with patch(
+            "app.services.ninerouter.httpx.AsyncClient", return_value=client
+        ) as client_factory:
+            result = await generate_ninerouter_chat_text("prompt", self.settings)
+
+        self.assertEqual(result, "Answer.")
+        client_factory.assert_called_once_with(timeout=23)
+        client.post.assert_awaited_once_with(
+            "http://router:20128/v1/chat/completions",
+            headers={"Authorization": "Bearer router-key"},
+            json={
+                "model": "free-chat-route",
+                "messages": [{"role": "user", "content": "prompt"}],
+                "stream": False,
+                "temperature": 0.2,
+                "max_tokens": 512,
+            },
+        )
+
+    async def test_omits_authorization_without_optional_key(self) -> None:
+        client = _AsyncClientStub(
+            result=_response(payload={"choices": [{"message": {"content": "Answer."}}]})
+        )
+        settings = AiSettings(
+            NINEROUTER_URL="http://router",
+            NINEROUTER_CHAT_MODEL="free-chat-route",
+        )
+        with patch("app.services.ninerouter.httpx.AsyncClient", return_value=client):
+            result = await generate_ninerouter_chat_text("prompt", settings)
+
+        self.assertEqual(result, "Answer.")
+        self.assertEqual(client.post.await_args.kwargs["headers"], {})
+
+    async def test_rejects_missing_url_or_chat_model_before_request(self) -> None:
+        cases = (
+            AiSettings(NINEROUTER_URL="", NINEROUTER_CHAT_MODEL="free-chat-route"),
+            AiSettings(NINEROUTER_URL="http://router", NINEROUTER_CHAT_MODEL=""),
+        )
+        for settings in cases:
+            with self.subTest(settings=settings), patch(
+                "app.services.ninerouter.httpx.AsyncClient"
+            ) as client_factory:
+                with self.assertRaises(NineRouterChatError):
+                    await generate_ninerouter_chat_text("prompt", settings)
+            client_factory.assert_not_called()
+
+    async def test_translates_http_and_timeout_failures(self) -> None:
+        failures = (
+            _response(status_code=503, payload={"error": {"message": "unavailable"}}),
+            httpx.TimeoutException("router timed out"),
+        )
+        for failure in failures:
+            options = (
+                {"result": failure}
+                if isinstance(failure, httpx.Response)
+                else {"error": failure}
+            )
+            with self.subTest(failure=failure):
+                client = _AsyncClientStub(**options)
+                with patch(
+                    "app.services.ninerouter.httpx.AsyncClient", return_value=client
+                ):
+                    with self.assertRaises(NineRouterChatError):
+                        await generate_ninerouter_chat_text("prompt", self.settings)
+
+    async def test_rejects_malformed_or_empty_chat_completion_content(self) -> None:
+        invalid_responses = (
+            _response(content=b"not-json"),
+            _response(payload={}),
+            _response(payload={"choices": [{}]}),
+            _response(payload={"choices": [{"message": {}}]}),
+            _response(payload={"choices": [{"message": {"content": "  "}}]}),
+        )
+        for response in invalid_responses:
+            with self.subTest(response=response):
+                client = _AsyncClientStub(result=response)
+                with patch(
+                    "app.services.ninerouter.httpx.AsyncClient", return_value=client
+                ):
+                    with self.assertRaises(NineRouterChatError):
+                        await generate_ninerouter_chat_text("prompt", self.settings)
 
 if __name__ == "__main__":
     unittest.main()

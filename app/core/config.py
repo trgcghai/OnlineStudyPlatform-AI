@@ -51,6 +51,14 @@ class AiSettings(BaseSettings):
         gt=0,
         validation_alias="NINEROUTER_SUMMARY_TIMEOUT_SECONDS",
     )
+    ninerouter_chat_model: str = Field(
+        default="", validation_alias="NINEROUTER_CHAT_MODEL"
+    )
+    ninerouter_chat_timeout_seconds: float = Field(
+        default=120,
+        gt=0,
+        validation_alias="NINEROUTER_CHAT_TIMEOUT_SECONDS",
+    )
     ninerouter_language: str = Field(
         default="vi", validation_alias="NINEROUTER_LANGUAGE"
     )

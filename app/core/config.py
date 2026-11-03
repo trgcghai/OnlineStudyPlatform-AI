@@ -22,29 +22,42 @@ class MongoSettings(BaseSettings):
 
 class AiSettings(BaseSettings):
     ai_token: str | None = Field(default=None, validation_alias="AI_TOKEN")
-    llm_provider: str = Field(default="gemini", validation_alias="LLM_PROVIDER")
-    gemini_api_key: str | None = Field(default=None, validation_alias="GEMINI_API_KEY")
-    gemini_model: str = Field(
-        default="gemini-2.5-flash", validation_alias="GEMINI_MODEL"
-    )
-    gemini_timeout_seconds: float = Field(
-        default=30, validation_alias="GEMINI_TIMEOUT_SECONDS"
-    )
-    summary_provider: str = Field(default="auto", validation_alias="SUMMARY_PROVIDER")
     summary_chunk_size: int = Field(
         default=6000, ge=500, le=30000, validation_alias="SUMMARY_CHUNK_SIZE"
     )
     summary_max_output_tokens: int = Field(
         default=2048, ge=128, le=8192, validation_alias="SUMMARY_MAX_OUTPUT_TOKENS"
     )
-    whisper_model: str = Field(default="small", validation_alias="WHISPER_MODEL")
-    whisper_device: str = Field(default="cpu", validation_alias="WHISPER_DEVICE")
-    whisper_compute_type: str = Field(
-        default="int8", validation_alias="WHISPER_COMPUTE_TYPE"
+    ninerouter_url: str = Field(default="", validation_alias="NINEROUTER_URL")
+    ninerouter_api_key: str | None = Field(
+        default=None, validation_alias="NINEROUTER_API_KEY"
     )
-    whisper_language: str = Field(default="vi", validation_alias="WHISPER_LANGUAGE")
-    whisper_download_root: str | None = Field(
-        default=None, validation_alias="WHISPER_DOWNLOAD_ROOT"
+    ninerouter_stt_model: str = Field(
+        default="", validation_alias="NINEROUTER_STT_MODEL"
+    )
+    ninerouter_summary_model: str = Field(
+        default="", validation_alias="NINEROUTER_SUMMARY_MODEL"
+    )
+    ninerouter_summary_timeout_seconds: float = Field(
+        default=120,
+        gt=0,
+        validation_alias="NINEROUTER_SUMMARY_TIMEOUT_SECONDS",
+    )
+    ninerouter_chat_model: str = Field(
+        default="", validation_alias="NINEROUTER_CHAT_MODEL"
+    )
+    ninerouter_chat_timeout_seconds: float = Field(
+        default=120,
+        gt=0,
+        validation_alias="NINEROUTER_CHAT_TIMEOUT_SECONDS",
+    )
+    ninerouter_language: str = Field(
+        default="vi", validation_alias="NINEROUTER_LANGUAGE"
+    )
+    ninerouter_timeout_seconds: float = Field(
+        default=1500,
+        gt=0,
+        validation_alias="NINEROUTER_TIMEOUT_SECONDS",
     )
     transcribe_max_bytes: int = Field(
         default=1_073_741_824, ge=1, validation_alias="TRANSCRIBE_MAX_BYTES"

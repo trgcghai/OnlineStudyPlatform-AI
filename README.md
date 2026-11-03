@@ -7,13 +7,23 @@ bài giảng.
 
 Backend giữ video gốc cho người học, dùng FFmpeg tạo audio Ogg/Opus mono 16 kHz
 và gửi URL audio nội bộ qua `POST /transcribe`. Dịch vụ tải audio có giới hạn
-dung lượng/host rồi chạy `faster-whisper`. Transcript chỉ tồn tại trong pipeline
-và được gửi đến `POST /summarize`; transcript không được lưu làm nội dung tóm tắt.
+dung lượng/host rồi gửi audio multipart đến endpoint transcription của 9Router
+được cấu hình qua `NINEROUTER_URL` và `NINEROUTER_STT_MODEL`. Transcript chỉ tồn
+tại trong pipeline và được gửi đến `POST /summarize`; transcript không được lưu
+làm nội dung tóm tắt.
 
-`POST /summarize` bắt buộc dùng Gemini để biên tập lại nội dung thành tiếng Việt
-tự nhiên với ba phần `Tổng quan`, `Nội dung chính`, `Kết luận và ghi nhớ`. Kết quả
-thiếu cấu trúc hoặc lỗi Gemini sẽ trả lỗi để BullMQ retry; dịch vụ không rơi về
-việc cắt ghép câu transcript.
+`POST /summarize` gửi transcript đến chat-completions API của 9Router, sử dụng
+model cấu hình qua `NINEROUTER_SUMMARY_MODEL`. Mỗi lời gọi có timeout riêng được
+cấu hình qua `NINEROUTER_SUMMARY_TIMEOUT_SECONDS` (mặc định 120 giây). Nội dung
+được biên tập thành tiếng Việt với ba phần `Tổng quan`, `Nội dung chính`,
+`Kết luận và ghi nhớ`. Lỗi từ 9Router hoặc kết quả thiếu cấu trúc sẽ trả lỗi để
+BullMQ retry; dịch vụ không rơi về việc cắt ghép câu transcript.
+
+Chat RAG truy xuất các đoạn nội dung của khóa học từ Qdrant, sau đó gửi câu hỏi
+cùng ngữ cảnh và lịch sử liên quan đến chat-completions API của 9Router để tạo
+câu trả lời. Cấu hình model qua `NINEROUTER_CHAT_MODEL` và timeout qua
+`NINEROUTER_CHAT_TIMEOUT_SECONDS` (mặc định 120 giây); luồng chat dùng chung
+`NINEROUTER_URL` và `NINEROUTER_API_KEY` với các tính năng 9Router khác.
 
 Ví dụ yêu cầu phiên âm:
 
@@ -56,6 +66,3 @@ uv run python -m scripts.train_oulad_dropout
 
 Kaggle and OULAD artifacts are stored under separate MinIO model-version keys so
 they can be compared before choosing which model to keep active.
-
-Model Whisper được tải ở lần chạy đầu. Docker Compose gắn volume cache tại
-`/var/cache/huggingface` để các lần khởi động sau không tải lại model.

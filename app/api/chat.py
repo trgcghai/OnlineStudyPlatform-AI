@@ -5,7 +5,7 @@ from pydantic import BaseModel, Field
 
 from app.api.dependencies import verify_token
 from app.core.config import AiSettings, get_ai_settings
-from app.services.llm import generate_gemini_answer
+from app.services.llm import generate_ninerouter_chat_answer
 from app.services.rag import answer_with_rag, build_query, select_history
 from app.services.vector_store import search_course
 
@@ -62,13 +62,14 @@ async def chat(
     answer = result.answer
 
     if result.in_scope:
-        generated_answer = await generate_gemini_answer(
+        generated_answer = await generate_ninerouter_chat_answer(
             question=request.question,
             history=history,
             citations=result.citations,
             settings=settings,
         )
-        answer = generated_answer or answer
+        if generated_answer is not None:
+            answer = generated_answer
 
     return ChatResponse(
         answer=answer,

@@ -5,15 +5,17 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
+import httpx
 from fastapi.testclient import TestClient
 
 from app.core.config import AiSettings, get_ai_settings
 from app.main import app
-from app.services.llm import call_gemini
+from app.services.ninerouter import NineRouterSummaryError
 from app.services.summarization import (
     SummarizationError,
     SummaryResult,
     build_final_summary_prompt,
+    build_notes_prompt,
     chunk_transcript,
     summarize_transcript,
     validate_summary,
@@ -94,7 +96,7 @@ class SummaryApiTests(unittest.TestCase):
         ) as summarize_transcript_mock:
             summarize_transcript_mock.return_value = SummaryResult(
                 summary=VALID_SUMMARY,
-                provider="gemini",
+                provider="9router",
             )
             response = TestClient(app).post(
                 "/summarize",
@@ -106,7 +108,7 @@ class SummaryApiTests(unittest.TestCase):
             )
 
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json()["provider"], "gemini")
+        self.assertEqual(response.json()["provider"], "9router")
 
     def test_summary_endpoints_reject_invalid_token(self) -> None:
         app.dependency_overrides[get_ai_settings] = lambda: AiSettings(
@@ -124,30 +126,6 @@ class SummaryApiTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 401)
 
-    def test_gemini_key_is_sent_in_header_not_url(self) -> None:
-        class _GeminiResponse:
-            def __enter__(self):
-                return self
-
-            def __exit__(self, *args):
-                return False
-
-            def read(self) -> bytes:
-                return b'{"candidates":[{"content":{"parts":[{"text":"OK"}]}}]}'
-
-        settings = AiSettings(GEMINI_API_KEY="private-key")
-        with patch(
-            "app.services.llm.urllib.request.urlopen",
-            return_value=_GeminiResponse(),
-        ) as urlopen:
-            result = call_gemini("test", settings)
-
-        request = urlopen.call_args.args[0]
-        self.assertNotIn("private-key", request.full_url)
-        self.assertEqual(request.get_header("X-goog-api-key"), "private-key")
-        self.assertEqual(result, "OK")
-
-
 class SummarizationTests(unittest.IsolatedAsyncioTestCase):
     def test_final_prompt_requires_natural_complete_vietnamese_structure(self) -> None:
         prompt = build_final_summary_prompt(
@@ -162,22 +140,23 @@ class SummarizationTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("## Nội dung chính", prompt)
         self.assertIn("## Kết luận và ghi nhớ", prompt)
 
-    def test_chunk_transcript_splits_unpunctuated_whisper_text(self) -> None:
+    def test_chunk_transcript_splits_unpunctuated_transcript_text(self) -> None:
         transcript = "nội dung bài giảng " * 80
         chunks = chunk_transcript(transcript, 500)
 
         self.assertGreater(len(chunks), 1)
         self.assertTrue(all(len(chunk) <= 500 for chunk in chunks))
 
-    async def test_short_transcript_returns_only_validated_gemini_output(self) -> None:
+    async def test_short_transcript_returns_only_validated_9router_output(self) -> None:
         settings = AiSettings(
-            GEMINI_API_KEY="configured",
-            SUMMARY_PROVIDER="gemini",
+            NINEROUTER_URL="http://router",
+            NINEROUTER_SUMMARY_MODEL="free-chat-route",
         )
         with patch(
-            "app.services.summarization.generate_gemini_text",
+            "app.services.summarization.generate_ninerouter_text",
             new_callable=AsyncMock,
             return_value=VALID_SUMMARY,
+            create=True,
         ):
             result = await summarize_transcript(
                 "Dependency Injection",
@@ -185,18 +164,19 @@ class SummarizationTests(unittest.IsolatedAsyncioTestCase):
                 settings,
             )
 
-        self.assertEqual(result.provider, "gemini")
+        self.assertEqual(result.provider, "9router")
         self.assertEqual(result.summary, VALID_SUMMARY)
 
-    async def test_gemini_failure_is_not_replaced_by_extractive_transcript(self) -> None:
+    async def test_9router_failure_is_reported_for_retry(self) -> None:
         settings = AiSettings(
-            GEMINI_API_KEY="configured",
-            SUMMARY_PROVIDER="gemini",
+            NINEROUTER_URL="http://router",
+            NINEROUTER_SUMMARY_MODEL="free-chat-route",
         )
         with patch(
-            "app.services.summarization.generate_gemini_text",
+            "app.services.summarization.generate_ninerouter_text",
             new_callable=AsyncMock,
-            return_value=None,
+            side_effect=NineRouterSummaryError("request failed"),
+            create=True,
         ):
             with self.assertRaisesRegex(SummarizationError, "could not generate"):
                 await summarize_transcript(
@@ -205,12 +185,16 @@ class SummarizationTests(unittest.IsolatedAsyncioTestCase):
                     settings,
                 )
 
-    async def test_invalid_gemini_structure_is_rejected(self) -> None:
-        settings = AiSettings(GEMINI_API_KEY="configured")
+    async def test_invalid_9router_structure_is_rejected(self) -> None:
+        settings = AiSettings(
+            NINEROUTER_URL="http://router",
+            NINEROUTER_SUMMARY_MODEL="free-chat-route",
+        )
         with patch(
-            "app.services.summarization.generate_gemini_text",
+            "app.services.summarization.generate_ninerouter_text",
             new_callable=AsyncMock,
             return_value="Dependency Injection cung cấp dependency cho lớp.",
+            create=True,
         ):
             with self.assertRaisesRegex(SummarizationError, "required structure"):
                 await summarize_transcript(
@@ -220,8 +204,55 @@ class SummarizationTests(unittest.IsolatedAsyncioTestCase):
                 )
 
     def test_transcript_copy_is_rejected_even_when_it_has_headings(self) -> None:
-        with self.assertRaisesRegex(SummarizationError, "instead of a summary"):
+        with self.assertRaisesRegex(
+            SummarizationError, "Model returned the transcript instead of a summary"
+        ):
             validate_summary(VALID_SUMMARY, VALID_SUMMARY)
+
+    def test_summary_rejects_out_of_order_headings(self) -> None:
+        out_of_order = """## Tổng quan
+
+Chủ đề bài học.
+
+## Kết luận và ghi nhớ
+
+Điều cần ghi nhớ.
+
+## Nội dung chính
+
+- Một ý chính.
+"""
+        with self.assertRaisesRegex(
+            SummarizationError, "Summary is missing the required structure"
+        ):
+            validate_summary(out_of_order, "Nguồn bài học.")
+
+    def test_summary_rejects_empty_section(self) -> None:
+        empty_section = VALID_SUMMARY.replace(
+            "Bài học giới thiệu Dependency Injection và vai trò của cơ chế này trong ứng dụng.",
+            "",
+        )
+        with self.assertRaisesRegex(SummarizationError, "Summary contains an empty section"):
+            validate_summary(empty_section, "Nguồn bài học.")
+
+    def test_summary_requires_main_content_bullets(self) -> None:
+        no_bullets = VALID_SUMMARY.replace("- Dependency Injection", "Dependency Injection").replace(
+            "- Constructor injection", "Constructor injection"
+        )
+        with self.assertRaisesRegex(
+            SummarizationError, "Summary has no main-content bullet points"
+        ):
+            validate_summary(no_bullets, "Nguồn bài học.")
+
+    async def test_empty_transcript_is_rejected_before_router_call(self) -> None:
+        with patch(
+            "app.services.summarization.generate_ninerouter_text",
+            new_callable=AsyncMock,
+            create=True,
+        ) as generate:
+            with self.assertRaisesRegex(SummarizationError, "Transcript is empty"):
+                await summarize_transcript("Bài học", " \n ", AiSettings())
+        generate.assert_not_awaited()
 
     def test_valid_summary_normalizes_common_markdown_bullet_styles(self) -> None:
         star_bullets = VALID_SUMMARY.replace("- Dependency", "* Dependency").replace(
@@ -233,18 +264,10 @@ class SummarizationTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("- Dependency", result)
         self.assertIn("- Constructor", result)
 
-    async def test_missing_gemini_key_is_a_retryable_summary_error(self) -> None:
-        with self.assertRaisesRegex(SummarizationError, "API key"):
-            await summarize_transcript(
-                "Bài học",
-                "Nội dung bài học có thông tin.",
-                AiSettings(GEMINI_API_KEY=None),
-            )
-
-    async def test_long_transcript_uses_notes_then_final_gemini_call(self) -> None:
+    async def test_long_transcript_uses_notes_then_final_9router_call(self) -> None:
         settings = AiSettings(
-            GEMINI_API_KEY="configured",
-            SUMMARY_PROVIDER="gemini",
+            NINEROUTER_URL="http://router",
+            NINEROUTER_SUMMARY_MODEL="free-chat-route",
             SUMMARY_CHUNK_SIZE=500,
         )
         transcript = " ".join(
@@ -257,8 +280,9 @@ class SummarizationTests(unittest.IsolatedAsyncioTestCase):
         )
         chunks = chunk_transcript(transcript, settings.summary_chunk_size)
         with patch(
-            "app.services.summarization.generate_gemini_text",
+            "app.services.summarization.generate_ninerouter_text",
             new_callable=AsyncMock,
+            create=True,
         ) as generate:
             generate.side_effect = [
                 *["- Ghi chú sự kiện quan trọng."] * len(chunks),
@@ -266,8 +290,29 @@ class SummarizationTests(unittest.IsolatedAsyncioTestCase):
             ]
             result = await summarize_transcript("Bài học", transcript, settings)
 
-        self.assertEqual(result.provider, "gemini")
+        self.assertEqual(result.provider, "9router")
         self.assertEqual(generate.await_count, len(chunks) + 1)
+        self.assertEqual(
+            [call.args[0] for call in generate.await_args_list[:-1]],
+            [
+                build_notes_prompt("Bài học", chunk, index, len(chunks))
+                for index, chunk in enumerate(chunks, start=1)
+            ],
+        )
+        self.assertEqual(
+            generate.await_args_list[-1].args[0],
+            build_final_summary_prompt(
+                "Bài học",
+                "\n\n".join(["- Ghi chú sự kiện quan trọng."] * len(chunks)),
+                "GHI_CHU_DA_TRICH_XUAT",
+            ),
+        )
+        self.assertTrue(
+            all(
+                call.kwargs["max_output_tokens"] == settings.summary_max_output_tokens
+                for call in generate.await_args_list
+            )
+        )
 
 
 class _FakeDownloadResponse:
@@ -324,26 +369,141 @@ class TranscriptionTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertFalse(Path(path).exists())
 
-    def test_whisper_segments_are_joined_in_order(self) -> None:
-        model = SimpleNamespace(
-            transcribe=lambda *_args, **_kwargs: (
-                [
-                    SimpleNamespace(text=" Xin chào "),
-                    SimpleNamespace(text=" bài giảng. "),
-                ],
-                SimpleNamespace(language="vi", duration=8.5),
-            )
+    def test_transcribe_file_posts_multipart_and_maps_metadata(self) -> None:
+        audio_path = Path(__file__).resolve()
+        response = httpx.Response(
+            200,
+            json={"text": " Xin chào ", "language": "vi", "duration": 8.5},
+            request=httpx.Request("POST", "http://router/v1/audio/transcriptions"),
         )
-        with patch(
-            "app.services.transcription.get_whisper_model",
-            return_value=model,
-        ):
-            result = transcribe_file("audio.ogg", AiSettings())
+        uploaded = {}
 
-        self.assertEqual(result.transcript, "Xin chào bài giảng.")
+        def capture_request(url, **kwargs):
+            uploaded["bytes"] = kwargs["files"]["file"][1].read()
+            return response
+
+        with patch("httpx.post", side_effect=capture_request) as post:
+            result = transcribe_file(
+                str(audio_path),
+                AiSettings(
+                    NINEROUTER_URL="http://router",
+                    NINEROUTER_API_KEY="router-secret",
+                    NINEROUTER_STT_MODEL="free-stt-route",
+                    NINEROUTER_LANGUAGE="vi",
+                    NINEROUTER_TIMEOUT_SECONDS=17,
+                ),
+            )
+
+        self.assertEqual(result.transcript, "Xin chào")
+        self.assertEqual(result.language, "vi")
         self.assertEqual(result.duration_seconds, 8.5)
+        post.assert_called_once()
+        self.assertEqual(post.call_args.args[0], "http://router/v1/audio/transcriptions")
+        kwargs = post.call_args.kwargs
+        self.assertEqual(
+            kwargs["data"],
+            {
+                "model": "free-stt-route",
+                "language": "vi",
+                "response_format": "verbose_json",
+            },
+        )
+        self.assertEqual(kwargs["headers"]["Authorization"], "Bearer router-secret")
+        self.assertEqual(kwargs["timeout"], 17)
+        self.assertEqual(kwargs["files"]["file"][0], audio_path.name)
+        self.assertEqual(uploaded["bytes"], audio_path.read_bytes())
 
-    async def test_transcribe_audio_cleans_up_after_whisper_failure(self) -> None:
+    def test_transcribe_file_uses_defaults_when_provider_omits_metadata(self) -> None:
+        audio_path = Path(__file__).resolve()
+        response = httpx.Response(
+            200,
+            json={"text": "Nội dung bài học"},
+            request=httpx.Request("POST", "http://router/v1/audio/transcriptions"),
+        )
+        with patch("httpx.post", return_value=response) as post:
+            result = transcribe_file(
+                str(audio_path),
+                AiSettings(
+                    NINEROUTER_URL="http://router",
+                    NINEROUTER_STT_MODEL="free-stt-route",
+                    NINEROUTER_LANGUAGE="",
+                ),
+            )
+
+        self.assertEqual(result.language, "vi")
+        self.assertEqual(result.duration_seconds, 0)
+        self.assertNotIn("Authorization", post.call_args.kwargs["headers"])
+        self.assertEqual(post.call_args.kwargs["data"]["language"], "vi")
+
+    def test_transcribe_file_rejects_malformed_or_empty_payloads(self) -> None:
+        responses = [
+            httpx.Response(
+                200,
+                content=b"not-json",
+                request=httpx.Request("POST", "http://router/v1/audio/transcriptions"),
+            ),
+            httpx.Response(
+                200,
+                json={},
+                request=httpx.Request("POST", "http://router/v1/audio/transcriptions"),
+            ),
+            httpx.Response(
+                200,
+                json={"text": "   "},
+                request=httpx.Request("POST", "http://router/v1/audio/transcriptions"),
+            ),
+        ]
+        audio_path = Path(__file__).resolve()
+        for response in responses:
+            with self.subTest(response=response), patch(
+                "httpx.post", return_value=response
+            ):
+                with self.assertRaises(TranscriptionError):
+                    transcribe_file(
+                        str(audio_path),
+                        AiSettings(
+                            NINEROUTER_URL="http://router",
+                            NINEROUTER_STT_MODEL="free-stt-route",
+                        ),
+                    )
+
+    def test_transcribe_file_translates_http_and_network_failures(self) -> None:
+        audio_path = Path(__file__).resolve()
+        failures = [
+            httpx.Response(
+                503,
+                request=httpx.Request("POST", "http://router/v1/audio/transcriptions"),
+            ),
+            httpx.TimeoutException("router timeout"),
+        ]
+        for failure in failures:
+            with self.subTest(failure=failure):
+                mock_options = (
+                    {"return_value": failure}
+                    if isinstance(failure, httpx.Response)
+                    else {"side_effect": failure}
+                )
+                with patch("httpx.post", **mock_options):
+                    with self.assertRaises(TranscriptionError):
+                        transcribe_file(
+                            str(audio_path),
+                            AiSettings(
+                                NINEROUTER_URL="http://router",
+                                NINEROUTER_STT_MODEL="free-stt-route",
+                            ),
+                        )
+
+    def test_transcribe_file_requires_router_url_and_model(self) -> None:
+        audio_path = Path(__file__).resolve()
+        with patch("httpx.post") as post:
+            with self.assertRaises(TranscriptionError):
+                transcribe_file(
+                    str(audio_path),
+                    AiSettings(NINEROUTER_URL="", NINEROUTER_STT_MODEL=""),
+                )
+        post.assert_not_called()
+
+    async def test_transcribe_audio_cleans_up_after_router_failure(self) -> None:
         file_descriptor, path = tempfile.mkstemp()
         os.close(file_descriptor)
         with (
@@ -353,13 +513,22 @@ class TranscriptionTests(unittest.IsolatedAsyncioTestCase):
             ),
             patch(
                 "app.services.transcription.transcribe_file",
-                side_effect=TranscriptionError("empty transcript"),
+                side_effect=TranscriptionError("router unavailable"),
             ),
         ):
-            with self.assertRaisesRegex(TranscriptionError, "empty transcript"):
+            with self.assertRaisesRegex(TranscriptionError, "router unavailable"):
                 await transcribe_audio("http://minio/audio.ogg", AiSettings())
 
         self.assertFalse(Path(path).exists())
+
+    async def test_transcribe_audio_does_not_call_router_for_disallowed_media(self) -> None:
+        with patch("httpx.post") as post:
+            with self.assertRaisesRegex(TranscriptionError, "not allowed"):
+                await transcribe_audio(
+                    "https://example.com/audio.ogg",
+                    AiSettings(TRANSCRIBE_ALLOWED_HOSTS="minio"),
+                )
+        post.assert_not_called()
 
 
 if __name__ == "__main__":

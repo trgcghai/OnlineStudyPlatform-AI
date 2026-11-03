@@ -204,7 +204,9 @@ class SummarizationTests(unittest.IsolatedAsyncioTestCase):
                 )
 
     def test_transcript_copy_is_rejected_even_when_it_has_headings(self) -> None:
-        with self.assertRaisesRegex(SummarizationError, "instead of a summary"):
+        with self.assertRaisesRegex(
+            SummarizationError, "Model returned the transcript instead of a summary"
+        ):
             validate_summary(VALID_SUMMARY, VALID_SUMMARY)
 
     def test_summary_rejects_out_of_order_headings(self) -> None:

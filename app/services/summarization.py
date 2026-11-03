@@ -176,7 +176,7 @@ def validate_summary(summary: str, transcript: str) -> str:
     )
 
     if normalize_text(validated).casefold() == normalize_text(transcript).casefold():
-        raise SummarizationError("Gemini returned the transcript instead of a summary")
+        raise SummarizationError("Model returned the transcript instead of a summary")
     return validated
 
 

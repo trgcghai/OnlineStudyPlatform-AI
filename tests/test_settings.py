@@ -7,6 +7,20 @@ from tempfile import TemporaryDirectory
 
 
 class SettingsTests(unittest.TestCase):
+    def test_ai_settings_no_longer_expose_gemini_chat_configuration(self) -> None:
+        from app.core.config import AiSettings
+
+        settings = AiSettings()
+
+        for name in (
+            "llm_provider",
+            "gemini_api_key",
+            "gemini_model",
+            "gemini_timeout_seconds",
+        ):
+            with self.subTest(name=name):
+                self.assertFalse(hasattr(settings, name))
+
     def test_ai_settings_accept_9router_chat_model_and_timeout(self) -> None:
         from pydantic import ValidationError
 

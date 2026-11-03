@@ -19,8 +19,11 @@ cấu hình qua `NINEROUTER_SUMMARY_TIMEOUT_SECONDS` (mặc định 120 giây). 
 `Kết luận và ghi nhớ`. Lỗi từ 9Router hoặc kết quả thiếu cấu trúc sẽ trả lỗi để
 BullMQ retry; dịch vụ không rơi về việc cắt ghép câu transcript.
 
-Chat RAG vẫn dùng Gemini trực tiếp; cấu hình `LLM_PROVIDER`, `GEMINI_API_KEY` và
-`GEMINI_MODEL` chỉ phục vụ luồng chat này.
+Chat RAG truy xuất các đoạn nội dung của khóa học từ Qdrant, sau đó gửi câu hỏi
+cùng ngữ cảnh và lịch sử liên quan đến chat-completions API của 9Router để tạo
+câu trả lời. Cấu hình model qua `NINEROUTER_CHAT_MODEL` và timeout qua
+`NINEROUTER_CHAT_TIMEOUT_SECONDS` (mặc định 120 giây); luồng chat dùng chung
+`NINEROUTER_URL` và `NINEROUTER_API_KEY` với các tính năng 9Router khác.
 
 Ví dụ yêu cầu phiên âm:
 

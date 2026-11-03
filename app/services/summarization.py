@@ -2,7 +2,7 @@ import re
 from dataclasses import dataclass
 
 from app.core.config import AiSettings
-from app.services.llm import generate_gemini_text
+from app.services.ninerouter import NineRouterSummaryError, generate_ninerouter_text
 
 
 SUMMARY_HEADING = "## Tổng quan"
@@ -151,19 +151,19 @@ def validate_summary(summary: str, transcript: str) -> str:
     validated = _strip_markdown_fence(summary)
     positions = [validated.find(heading) for heading in REQUIRED_HEADINGS]
     if any(position < 0 for position in positions) or positions != sorted(positions):
-        raise SummarizationError("Gemini summary is missing the required structure")
+        raise SummarizationError("Summary is missing the required structure")
 
     for index, heading in enumerate(REQUIRED_HEADINGS):
         start = positions[index] + len(heading)
         end = positions[index + 1] if index + 1 < len(positions) else len(validated)
         if not validated[start:end].strip():
-            raise SummarizationError("Gemini summary contains an empty section")
+            raise SummarizationError("Summary contains an empty section")
 
     main_start = positions[1] + len(MAIN_CONTENT_HEADING)
     main_end = positions[2]
     main_section = validated[main_start:main_end]
     if not BULLET_PATTERN.search(main_section):
-        raise SummarizationError("Gemini summary has no main-content bullet points")
+        raise SummarizationError("Summary has no main-content bullet points")
 
     normalized_main = BULLET_PATTERN.sub(
         lambda match: f"- {match.group(1).strip()}",
@@ -176,11 +176,22 @@ def validate_summary(summary: str, transcript: str) -> str:
     )
 
     if normalize_text(validated).casefold() == normalize_text(transcript).casefold():
-        raise SummarizationError("Gemini returned the transcript instead of a summary")
+        raise SummarizationError("Model returned the transcript instead of a summary")
     return validated
 
 
-async def summarize_with_gemini(
+async def _generate_summary_text(prompt: str, settings: AiSettings) -> str:
+    try:
+        return await generate_ninerouter_text(
+            prompt,
+            settings,
+            max_output_tokens=settings.summary_max_output_tokens,
+        )
+    except NineRouterSummaryError as error:
+        raise SummarizationError("9Router could not generate a summary") from error
+
+
+async def summarize_with_ninerouter(
     title: str,
     transcript: str,
     settings: AiSettings,
@@ -190,39 +201,36 @@ async def summarize_with_gemini(
         raise SummarizationError("Transcript is empty")
 
     if len(chunks) == 1:
-        generated = await generate_gemini_text(
+        generated = await _generate_summary_text(
             build_final_summary_prompt(
                 title,
                 chunks[0],
                 "NGUON_BAI_GIANG",
             ),
             settings,
-            max_output_tokens=settings.summary_max_output_tokens,
         )
     else:
         notes: list[str] = []
         for index, chunk in enumerate(chunks, start=1):
-            note = await generate_gemini_text(
+            note = await _generate_summary_text(
                 build_notes_prompt(title, chunk, index, len(chunks)),
                 settings,
-                max_output_tokens=settings.summary_max_output_tokens,
             )
             if not note:
-                raise SummarizationError("Gemini could not analyze the transcript")
+                raise SummarizationError("9Router could not analyze the transcript")
             notes.append(note.strip())
 
-        generated = await generate_gemini_text(
+        generated = await _generate_summary_text(
             build_final_summary_prompt(
                 title,
                 "\n\n".join(notes),
                 "GHI_CHU_DA_TRICH_XUAT",
             ),
             settings,
-            max_output_tokens=settings.summary_max_output_tokens,
         )
 
     if not generated:
-        raise SummarizationError("Gemini could not generate a summary")
+        raise SummarizationError("9Router could not generate a summary")
     return validate_summary(generated, transcript)
 
 
@@ -235,10 +243,5 @@ async def summarize_transcript(
     if not normalized:
         raise SummarizationError("Transcript is empty")
 
-    if settings.summary_provider.casefold() not in {"auto", "gemini"}:
-        raise SummarizationError("Only Gemini summary generation is supported")
-    if not settings.gemini_api_key:
-        raise SummarizationError("Gemini API key is not configured")
-
-    summary = await summarize_with_gemini(title, normalized, settings)
-    return SummaryResult(summary=summary, provider="gemini")
+    summary = await summarize_with_ninerouter(title, normalized, settings)
+    return SummaryResult(summary=summary, provider="9router")

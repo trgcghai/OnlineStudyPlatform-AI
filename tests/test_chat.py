@@ -5,7 +5,7 @@ from fastapi.testclient import TestClient
 
 from app.core.config import AiSettings, get_ai_settings
 from app.main import app
-from app.services.llm import build_gemini_prompt
+from app.services.llm import build_chat_prompt
 from app.services.rag import build_citations
 from app.services.vector_store import VectorSearchResult
 
@@ -28,19 +28,24 @@ class ChatTests(unittest.TestCase):
     def setUp(self) -> None:
         app.dependency_overrides[get_ai_settings] = lambda: AiSettings(
             AI_TOKEN=None,
-            LLM_PROVIDER="local",
-            GEMINI_API_KEY=None,
         )
 
     def tearDown(self) -> None:
         app.dependency_overrides.clear()
 
     def test_chat_searches_only_the_requested_course_and_returns_citation(self) -> None:
-        with patch(
-            "app.api.chat.search_course",
-            new_callable=AsyncMock,
-            return_value=[match()],
-        ) as search:
+        with (
+            patch(
+                "app.api.chat.search_course",
+                new_callable=AsyncMock,
+                return_value=[match()],
+            ) as search,
+            patch(
+                "app.api.chat.generate_ninerouter_chat_answer",
+                new_callable=AsyncMock,
+                return_value=None,
+            ),
+        ):
             response = TestClient(app).post(
                 "/chat",
                 json={
@@ -68,7 +73,7 @@ class ChatTests(unittest.TestCase):
                 return_value=[match()],
             ) as search,
             patch(
-                "app.api.chat.generate_gemini_answer",
+                "app.api.chat.generate_ninerouter_chat_answer",
                 new_callable=AsyncMock,
                 return_value="Hướng dẫn tách nền.",
             ) as generate,
@@ -104,7 +109,7 @@ class ChatTests(unittest.TestCase):
                 return_value=[match()],
             ) as search,
             patch(
-                "app.api.chat.generate_gemini_answer",
+                "app.api.chat.generate_ninerouter_chat_answer",
                 new_callable=AsyncMock,
                 return_value="Chọn màu cần loại bỏ.",
             ) as generate,
@@ -135,11 +140,18 @@ class ChatTests(unittest.TestCase):
         self.assertIn("Chroma key", history[0].content)
 
     def test_follow_up_keeps_two_recent_turns_and_supports_unaccented_text(self) -> None:
-        with patch(
-            "app.api.chat.search_course",
-            new_callable=AsyncMock,
-            return_value=[match()],
-        ) as search:
+        with (
+            patch(
+                "app.api.chat.search_course",
+                new_callable=AsyncMock,
+                return_value=[match()],
+            ) as search,
+            patch(
+                "app.api.chat.generate_ninerouter_chat_answer",
+                new_callable=AsyncMock,
+                return_value=None,
+            ),
+        ):
             response = TestClient(app).post(
                 "/chat",
                 json={
@@ -165,7 +177,7 @@ class ChatTests(unittest.TestCase):
         self.assertIn("giai thich them", query)
         self.assertNotIn("Canva", query)
 
-    def test_gemini_uses_full_chunk_while_citation_keeps_short_excerpt(self) -> None:
+    def test_ninerouter_uses_full_chunk_while_citation_keeps_short_excerpt(self) -> None:
         answer_at_end = "Đáp án chỉ xuất hiện ở cuối chunk."
         chunk_text = f"{'Nội dung mở đầu. ' * 30}{answer_at_end}"
 
@@ -176,7 +188,7 @@ class ChatTests(unittest.TestCase):
                 return_value=[match(text=chunk_text)],
             ),
             patch(
-                "app.api.chat.generate_gemini_answer",
+                "app.api.chat.generate_ninerouter_chat_answer",
                 new_callable=AsyncMock,
                 return_value="Đã tìm thấy đáp án.",
             ) as generate,
@@ -193,7 +205,7 @@ class ChatTests(unittest.TestCase):
             )
 
         citation = generate.await_args.kwargs["citations"][0]
-        prompt = build_gemini_prompt("Đáp án ở đâu?", [], [citation])
+        prompt = build_chat_prompt("Đáp án ở đâu?", [], [citation])
         self.assertIn(answer_at_end, prompt)
         self.assertNotIn(answer_at_end, response.json()["citations"][0]["excerpt"])
         self.assertLessEqual(len(response.json()["citations"][0]["excerpt"]), 360)
@@ -210,7 +222,7 @@ class ChatTests(unittest.TestCase):
         )
 
         self.assertEqual(len(citations), 2)
-        prompt = build_gemini_prompt("Các bước tách nền?", [], citations)
+        prompt = build_chat_prompt("Các bước tách nền?", [], citations)
         self.assertIn("Bước 4: Điều chỉnh Intensity.", prompt)
         self.assertIn("Bước 5: Điều chỉnh Shadow.", prompt)
 
@@ -222,13 +234,20 @@ class ChatTests(unittest.TestCase):
         self.assertLessEqual(sum(len(citation.text) for citation in citations), 12_000)
 
     def test_chat_keeps_distinct_chunks_with_the_same_source_locator(self) -> None:
-        with patch(
-            "app.api.chat.search_course",
-            new_callable=AsyncMock,
-            return_value=[
-                match(text="Đoạn transcript nói về provider."),
-                match(text="Đoạn transcript nói về service."),
-            ],
+        with (
+            patch(
+                "app.api.chat.search_course",
+                new_callable=AsyncMock,
+                return_value=[
+                    match(text="Đoạn transcript nói về provider."),
+                    match(text="Đoạn transcript nói về service."),
+                ],
+            ),
+            patch(
+                "app.api.chat.generate_ninerouter_chat_answer",
+                new_callable=AsyncMock,
+                return_value=None,
+            ),
         ):
             response = TestClient(app).post(
                 "/chat",
@@ -244,7 +263,7 @@ class ChatTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(len(response.json()["citations"]), 2)
 
-    def test_chat_refuses_without_relevant_vectors_and_skips_gemini(self) -> None:
+    def test_chat_refuses_without_relevant_vectors_and_skips_ninerouter(self) -> None:
         with (
             patch(
                 "app.api.chat.search_course",
@@ -252,7 +271,7 @@ class ChatTests(unittest.TestCase):
                 return_value=[],
             ),
             patch(
-                "app.api.chat.generate_gemini_answer",
+                "app.api.chat.generate_ninerouter_chat_answer",
                 new_callable=AsyncMock,
             ) as generate,
         ):
@@ -272,7 +291,7 @@ class ChatTests(unittest.TestCase):
         self.assertIn("ngoài nội dung", response.json()["answer"])
         generate.assert_not_awaited()
 
-    def test_chat_uses_gemini_for_a_grounded_answer(self) -> None:
+    def test_chat_uses_ninerouter_for_a_grounded_answer(self) -> None:
         with (
             patch(
                 "app.api.chat.search_course",
@@ -280,9 +299,9 @@ class ChatTests(unittest.TestCase):
                 return_value=[match()],
             ),
             patch(
-                "app.api.chat.generate_gemini_answer",
+                "app.api.chat.generate_ninerouter_chat_answer",
                 new_callable=AsyncMock,
-                return_value="Câu trả lời tự nhiên từ Gemini.",
+                return_value="Câu trả lời tự nhiên từ 9Router.",
             ) as generate,
         ):
             response = TestClient(app).post(
@@ -297,7 +316,34 @@ class ChatTests(unittest.TestCase):
             )
 
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json()["answer"], "Câu trả lời tự nhiên từ Gemini.")
+        self.assertEqual(response.json()["answer"], "Câu trả lời tự nhiên từ 9Router.")
+        generate.assert_awaited_once()
+
+    def test_chat_returns_server_error_when_9router_generation_fails(self) -> None:
+        with (
+            patch(
+                "app.api.chat.search_course",
+                new_callable=AsyncMock,
+                return_value=[match()],
+            ),
+            patch(
+                "app.api.chat.generate_ninerouter_chat_answer",
+                new_callable=AsyncMock,
+                side_effect=RuntimeError("9Router unavailable"),
+            ) as generate,
+        ):
+            response = TestClient(app, raise_server_exceptions=False).post(
+                "/chat",
+                json={
+                    "learnerId": "learner-1",
+                    "courseId": "course-1",
+                    "question": "Dependency injection là gì?",
+                    "similarityThreshold": 0.2,
+                    "history": [],
+                },
+            )
+
+        self.assertEqual(response.status_code, 500)
         generate.assert_awaited_once()
 
 

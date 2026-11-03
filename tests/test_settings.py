@@ -7,6 +7,73 @@ from tempfile import TemporaryDirectory
 
 
 class SettingsTests(unittest.TestCase):
+    def test_ai_settings_no_longer_expose_gemini_chat_configuration(self) -> None:
+        from app.core.config import AiSettings
+
+        settings = AiSettings()
+
+        for name in (
+            "llm_provider",
+            "gemini_api_key",
+            "gemini_model",
+            "gemini_timeout_seconds",
+        ):
+            with self.subTest(name=name):
+                self.assertFalse(hasattr(settings, name))
+
+    def test_ai_settings_accept_9router_chat_model_and_timeout(self) -> None:
+        from pydantic import ValidationError
+
+        from app.core.config import AiSettings
+
+        settings = AiSettings(
+            NINEROUTER_CHAT_MODEL="free-chat-route",
+            NINEROUTER_CHAT_TIMEOUT_SECONDS=120,
+        )
+
+        self.assertEqual(settings.ninerouter_chat_model, "free-chat-route")
+        self.assertEqual(settings.ninerouter_chat_timeout_seconds, 120)
+        self.assertEqual(AiSettings().ninerouter_chat_timeout_seconds, 120)
+        with self.assertRaises(ValidationError):
+            AiSettings(NINEROUTER_CHAT_TIMEOUT_SECONDS=0)
+
+    def test_ai_settings_accept_9router_summary_model_and_timeout(self) -> None:
+        from pydantic import ValidationError
+
+        from app.core.config import AiSettings
+
+        settings = AiSettings(
+            NINEROUTER_SUMMARY_MODEL="free-chat-route",
+            NINEROUTER_SUMMARY_TIMEOUT_SECONDS=120,
+        )
+
+        self.assertEqual(getattr(settings, "ninerouter_summary_model", None), "free-chat-route")
+        self.assertEqual(getattr(settings, "ninerouter_summary_timeout_seconds", None), 120)
+        self.assertEqual(getattr(AiSettings(), "ninerouter_summary_timeout_seconds", None), 120)
+        with self.assertRaises(ValidationError):
+            AiSettings(NINEROUTER_SUMMARY_TIMEOUT_SECONDS=0)
+
+    def test_ai_settings_accept_9router_configuration_and_positive_timeout(self) -> None:
+        from pydantic import ValidationError
+
+        from app.core.config import AiSettings
+
+        settings = AiSettings(
+            NINEROUTER_URL="http://9router:20128",
+            NINEROUTER_API_KEY="test-key",
+            NINEROUTER_STT_MODEL="free-stt-route",
+            NINEROUTER_LANGUAGE="vi",
+            NINEROUTER_TIMEOUT_SECONDS=1500,
+        )
+
+        self.assertEqual(settings.ninerouter_url, "http://9router:20128")
+        self.assertEqual(settings.ninerouter_api_key, "test-key")
+        self.assertEqual(settings.ninerouter_stt_model, "free-stt-route")
+        self.assertEqual(settings.ninerouter_language, "vi")
+        self.assertEqual(settings.ninerouter_timeout_seconds, 1500)
+        with self.assertRaises(ValidationError):
+            AiSettings(NINEROUTER_TIMEOUT_SECONDS=0)
+
     def test_database_settings_load_from_env_file(self) -> None:
         project_root = Path(__file__).resolve().parents[1]
         original_cwd = Path.cwd()

@@ -108,6 +108,6 @@
 - Verify: `tests/`
 - Verify: `app/`, `README.md`, `.env.example`, `../.env.example`, `../docker-compose.yml`
 
-- [ ] **Step 1: Run the full AI unit suite** from the AI repository with `$env:AI_TOKEN = ''; uv run python -m unittest discover tests`; expected: all tests pass. The process-only blank overrides the local `.env` token so recommendation tests run without auth, and it does not edit `.env`.
-- [ ] **Step 2: Review the final diff and environment references** to confirm summary/transcription behavior and existing root worktree changes remain intact, the chat settings reach the `ai` Compose service, and no local `.env` was edited.
-- [ ] **Step 3: Commit the final spec/plan timeout clarification and root pointer update** after review; any verification-driven code fix must first pass its focused test.
+- [x] **Step 1: Run the full AI unit suite** from the AI repository with `$env:AI_TOKEN = ''; uv run python -m unittest discover tests`; expected: all tests pass. The process-only blank overrides the local `.env` token so recommendation tests run without auth, and it does not edit `.env`.
+- [x] **Step 2: Review the final diff and environment references** to confirm summary/transcription behavior and existing root worktree changes remain intact, the chat settings reach the `ai` Compose service, and no local `.env` was edited. Final independent review found no Critical, Important, or Minor issues.
+- [x] **Step 3: Commit the final spec/plan timeout clarification and root pointer update** after review; any verification-driven code fix must first pass its focused test.

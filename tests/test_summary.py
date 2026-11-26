@@ -167,6 +167,31 @@ class SummarizationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result.provider, "9router")
         self.assertEqual(result.summary, VALID_SUMMARY)
 
+    async def test_final_summary_passes_structure_validator_to_9router(self) -> None:
+        settings = AiSettings(
+            NINEROUTER_URL="http://router",
+            NINEROUTER_SUMMARY_MODEL="summary-primary,summary-fallback",
+        )
+        with patch(
+            "app.services.summarization.generate_ninerouter_text",
+            new_callable=AsyncMock,
+            return_value=VALID_SUMMARY,
+        ) as generate:
+            await summarize_transcript(
+                "Dependency Injection",
+                "Dependency Injection cung cấp dependency cho lớp.",
+                settings,
+            )
+
+        validator = generate.await_args.kwargs.get("validator")
+        self.assertTrue(callable(validator))
+        self.assertEqual(
+            validator(VALID_SUMMARY),
+            VALID_SUMMARY,
+        )
+        with self.assertRaises(NineRouterSummaryError):
+            validator("Invalid summary structure.")
+
     async def test_9router_failure_is_reported_for_retry(self) -> None:
         settings = AiSettings(
             NINEROUTER_URL="http://router",
@@ -190,13 +215,23 @@ class SummarizationTests(unittest.IsolatedAsyncioTestCase):
             NINEROUTER_URL="http://router",
             NINEROUTER_SUMMARY_MODEL="free-chat-route",
         )
+
+        async def generate_invalid_summary(
+            _prompt,
+            _settings,
+            *,
+            validator=None,
+            **_kwargs,
+        ):
+            content = "Dependency Injection cung cấp dependency cho lớp."
+            return validator(content) if validator else content
+
         with patch(
             "app.services.summarization.generate_ninerouter_text",
-            new_callable=AsyncMock,
-            return_value="Dependency Injection cung cấp dependency cho lớp.",
+            side_effect=generate_invalid_summary,
             create=True,
         ):
-            with self.assertRaisesRegex(SummarizationError, "required structure"):
+            with self.assertRaisesRegex(SummarizationError, "could not generate"):
                 await summarize_transcript(
                     "Dependency Injection",
                     "Dependency Injection cung cấp dependency cho lớp.",
@@ -412,6 +447,145 @@ class TranscriptionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(kwargs["timeout"], 17)
         self.assertEqual(kwargs["files"]["file"][0], audio_path.name)
         self.assertEqual(uploaded["bytes"], audio_path.read_bytes())
+
+    def test_transcribe_file_retries_5xx_and_rate_limits_in_order(self) -> None:
+        audio_path = Path(__file__).resolve()
+        audio_bytes = audio_path.read_bytes()
+        for status_code in (503, 429):
+            with self.subTest(status_code=status_code):
+                responses = [
+                    httpx.Response(
+                        status_code,
+                        json={"error": {"message": "upstream detail"}},
+                        request=httpx.Request(
+                            "POST", "http://router/v1/audio/transcriptions"
+                        ),
+                    ),
+                    httpx.Response(
+                        200,
+                        json={"text": "Fallback transcript"},
+                        request=httpx.Request(
+                            "POST", "http://router/v1/audio/transcriptions"
+                        ),
+                    ),
+                ]
+                requests = []
+
+                def capture_request(_url, **kwargs):
+                    uploaded = kwargs["files"]["file"][1].read()
+                    requests.append(
+                        (
+                            kwargs["data"]["model"],
+                            kwargs["timeout"],
+                            uploaded,
+                        )
+                    )
+                    return responses.pop(0)
+
+                with patch("httpx.post", side_effect=capture_request) as post:
+                    result = transcribe_file(
+                        str(audio_path),
+                        AiSettings(
+                            NINEROUTER_URL="http://router",
+                            NINEROUTER_STT_MODEL="stt-primary, stt-fallback",
+                            NINEROUTER_TIMEOUT_SECONDS=24,
+                        ),
+                    )
+
+                self.assertEqual(result.transcript, "Fallback transcript")
+                self.assertEqual(post.call_count, 2)
+                self.assertEqual(
+                    requests,
+                    [
+                        ("stt-primary", 12, audio_bytes),
+                        ("stt-fallback", 12, audio_bytes),
+                    ],
+                )
+
+    def test_transcribe_file_retries_network_and_invalid_responses(self) -> None:
+        audio_path = Path(__file__).resolve()
+        endpoint = "http://router/v1/audio/transcriptions"
+        failures = (
+            httpx.TimeoutException("router timed out"),
+            httpx.Response(200, content=b"not-json", request=httpx.Request("POST", endpoint)),
+            httpx.Response(200, json={}, request=httpx.Request("POST", endpoint)),
+            httpx.Response(
+                200,
+                json={"text": "  "},
+                request=httpx.Request("POST", endpoint),
+            ),
+        )
+        for failure in failures:
+            with self.subTest(failure=failure):
+                fallback = httpx.Response(
+                    200,
+                    json={"text": "Fallback transcript"},
+                    request=httpx.Request("POST", endpoint),
+                )
+                with patch("httpx.post", side_effect=[failure, fallback]) as post:
+                    result = transcribe_file(
+                        str(audio_path),
+                        AiSettings(
+                            NINEROUTER_URL="http://router",
+                            NINEROUTER_STT_MODEL="stt-primary,stt-fallback",
+                        ),
+                    )
+
+                self.assertEqual(result.transcript, "Fallback transcript")
+                self.assertEqual(post.call_count, 2)
+                self.assertEqual(
+                    [entry.kwargs["data"]["model"] for entry in post.call_args_list],
+                    ["stt-primary", "stt-fallback"],
+                )
+
+    def test_transcribe_file_fails_fast_on_nonretryable_http_status(self) -> None:
+        audio_path = Path(__file__).resolve()
+        endpoint = "http://router/v1/audio/transcriptions"
+        failure = httpx.Response(
+            400,
+            json={"error": {"message": "invalid request"}},
+            request=httpx.Request("POST", endpoint),
+        )
+        fallback = httpx.Response(
+            200,
+            json={"text": "Should not be used"},
+            request=httpx.Request("POST", endpoint),
+        )
+        with patch("httpx.post", side_effect=[failure, fallback]) as post:
+            with self.assertRaises(TranscriptionError):
+                transcribe_file(
+                    str(audio_path),
+                    AiSettings(
+                        NINEROUTER_URL="http://router",
+                        NINEROUTER_STT_MODEL="stt-primary,stt-fallback",
+                    ),
+                )
+
+        self.assertEqual(post.call_count, 1)
+
+    def test_transcribe_file_raises_after_all_candidates_fail(self) -> None:
+        audio_path = Path(__file__).resolve()
+        endpoint = "http://router/v1/audio/transcriptions"
+        failures = [
+            httpx.Response(
+                503,
+                json={"error": {"message": "upstream detail"}},
+                request=httpx.Request("POST", endpoint),
+            )
+            for _ in range(2)
+        ]
+        with patch("httpx.post", side_effect=failures) as post:
+            with self.assertRaises(TranscriptionError) as raised:
+                transcribe_file(
+                    str(audio_path),
+                    AiSettings(
+                        NINEROUTER_URL="http://router",
+                        NINEROUTER_STT_MODEL="stt-primary,stt-fallback",
+                    ),
+                )
+
+        self.assertEqual(post.call_count, 2)
+        self.assertNotIn("upstream detail", str(raised.exception))
 
     def test_transcribe_file_uses_defaults_when_provider_omits_metadata(self) -> None:
         audio_path = Path(__file__).resolve()

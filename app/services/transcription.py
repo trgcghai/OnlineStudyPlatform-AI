@@ -111,8 +111,8 @@ def download_media(url: str, settings: AiSettings) -> str:
 
 def transcribe_file(path: str, settings: AiSettings) -> TranscriptionResult:
     base_url = settings.ninerouter_url.strip().rstrip("/")
-    model = settings.ninerouter_stt_model.strip()
-    if not base_url or not model:
+    models = settings.ninerouter_stt_models
+    if not base_url or not models:
         raise TranscriptionError("9Router URL and STT model must be configured")
 
     parsed_url = urllib.parse.urlparse(base_url)
@@ -127,49 +127,62 @@ def transcribe_file(path: str, settings: AiSettings) -> TranscriptionResult:
 
     content_type = mimetypes.guess_type(path)[0] or "application/octet-stream"
     language_hint = settings.ninerouter_language.strip() or "vi"
-    try:
-        with open(path, "rb") as audio_file:
-            response = httpx.post(
-                endpoint,
-                data={
-                    "model": model,
-                    "language": language_hint,
-                    "response_format": "verbose_json",
-                },
-                files={
-                    "file": (Path(path).name, audio_file, content_type),
-                },
-                headers=headers,
-                timeout=settings.ninerouter_timeout_seconds,
+    last_error: Exception | None = None
+    attempt_timeout = settings.ninerouter_timeout_seconds / len(models)
+    for model in models:
+        try:
+            with open(path, "rb") as audio_file:
+                response = httpx.post(
+                    endpoint,
+                    data={
+                        "model": model,
+                        "language": language_hint,
+                        "response_format": "verbose_json",
+                    },
+                    files={
+                        "file": (Path(path).name, audio_file, content_type),
+                    },
+                    headers=headers,
+                    timeout=attempt_timeout,
+                )
+                response.raise_for_status()
+                payload = response.json()
+
+            if not isinstance(payload, dict):
+                raise TranscriptionError(
+                    "9Router returned an invalid transcription payload"
+                )
+            transcript = payload.get("text")
+            if not isinstance(transcript, str) or not transcript.strip():
+                raise TranscriptionError("9Router returned an empty transcript")
+
+            language = payload.get("language")
+            if not isinstance(language, str) or not language.strip():
+                language = language_hint
+            duration_value = payload.get("duration")
+            duration = 0.0
+            if isinstance(duration_value, (int, float)) and not isinstance(
+                duration_value, bool
+            ):
+                parsed_duration = float(duration_value)
+                if math.isfinite(parsed_duration) and parsed_duration >= 0:
+                    duration = parsed_duration
+
+            return TranscriptionResult(
+                transcript=transcript.strip(),
+                language=language,
+                duration_seconds=duration,
             )
-            response.raise_for_status()
-            payload = response.json()
-    except (httpx.HTTPError, OSError) as error:
-        raise TranscriptionError("9Router transcription request failed") from error
-    except ValueError as error:
-        raise TranscriptionError("9Router returned invalid transcription JSON") from error
+        except httpx.HTTPStatusError as error:
+            if error.response.status_code != 429 and error.response.status_code < 500:
+                raise TranscriptionError(
+                    "9Router transcription request failed"
+                ) from error
+            last_error = error
+        except (httpx.RequestError, OSError, ValueError, TranscriptionError) as error:
+            last_error = error
 
-    if not isinstance(payload, dict):
-        raise TranscriptionError("9Router returned an invalid transcription payload")
-    transcript = payload.get("text")
-    if not isinstance(transcript, str) or not transcript.strip():
-        raise TranscriptionError("9Router returned an empty transcript")
-
-    language = payload.get("language")
-    if not isinstance(language, str) or not language.strip():
-        language = language_hint
-    duration_value = payload.get("duration")
-    duration = 0.0
-    if isinstance(duration_value, (int, float)) and not isinstance(duration_value, bool):
-        parsed_duration = float(duration_value)
-        if math.isfinite(parsed_duration) and parsed_duration >= 0:
-            duration = parsed_duration
-
-    return TranscriptionResult(
-        transcript=transcript.strip(),
-        language=language,
-        duration_seconds=duration,
-    )
+    raise TranscriptionError("9Router transcription request failed") from last_error
 
 
 async def transcribe_audio(url: str, settings: AiSettings) -> TranscriptionResult:

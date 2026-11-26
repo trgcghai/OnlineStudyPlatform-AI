@@ -4,6 +4,16 @@ from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
+def _parse_model_candidates(value: str) -> tuple[str, ...]:
+    return tuple(
+        dict.fromkeys(
+            candidate.strip()
+            for candidate in value.split(",")
+            if candidate.strip()
+        )
+    )
+
+
 class DatabaseSettings(BaseSettings):
     host: str = Field(validation_alias="DB_HOST")
     port: int = Field(validation_alias="DB_PORT")
@@ -134,6 +144,18 @@ class AiSettings(BaseSettings):
     )
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+
+    @property
+    def ninerouter_chat_models(self) -> tuple[str, ...]:
+        return _parse_model_candidates(self.ninerouter_chat_model)
+
+    @property
+    def ninerouter_summary_models(self) -> tuple[str, ...]:
+        return _parse_model_candidates(self.ninerouter_summary_model)
+
+    @property
+    def ninerouter_stt_models(self) -> tuple[str, ...]:
+        return _parse_model_candidates(self.ninerouter_stt_model)
 
     @property
     def transcribe_allowed_host_set(self) -> set[str]:

@@ -53,6 +53,20 @@ class SettingsTests(unittest.TestCase):
         with self.assertRaises(ValidationError):
             AiSettings(NINEROUTER_SUMMARY_TIMEOUT_SECONDS=0)
 
+    def test_ai_settings_parse_ordered_9router_model_lists(self) -> None:
+        from app.core.config import AiSettings
+
+        settings = AiSettings(
+            NINEROUTER_CHAT_MODEL=" chat-a, ,chat-b,chat-a ",
+            NINEROUTER_SUMMARY_MODEL="summary-a, summary-b",
+            NINEROUTER_STT_MODEL="stt-a",
+        )
+
+        self.assertEqual(settings.ninerouter_chat_models, ("chat-a", "chat-b"))
+        self.assertEqual(settings.ninerouter_summary_models, ("summary-a", "summary-b"))
+        self.assertEqual(settings.ninerouter_stt_models, ("stt-a",))
+        self.assertEqual(AiSettings().ninerouter_chat_models, ())
+
     def test_ai_settings_accept_9router_configuration_and_positive_timeout(self) -> None:
         from pydantic import ValidationError
 

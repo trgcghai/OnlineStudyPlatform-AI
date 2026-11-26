@@ -1,5 +1,5 @@
 import unittest
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, call, patch
 
 import httpx
 
@@ -136,6 +136,139 @@ class NineRouterSummaryAdapterTests(unittest.IsolatedAsyncioTestCase):
                             "prompt", self.settings, max_output_tokens=512
                         )
 
+    async def test_retries_429_and_server_errors_with_next_summary_model(self) -> None:
+        for status_code in (429, 503):
+            with self.subTest(status_code=status_code):
+                settings = AiSettings(
+                    NINEROUTER_URL="http://router",
+                    NINEROUTER_SUMMARY_MODEL="summary-primary, summary-fallback",
+                    NINEROUTER_SUMMARY_TIMEOUT_SECONDS=24,
+                )
+                first = _AsyncClientStub(
+                    result=_response(
+                        status_code=status_code,
+                        payload={"error": {"message": "upstream detail"}},
+                    )
+                )
+                second = _AsyncClientStub(
+                    result=_response(
+                        payload={"choices": [{"message": {"content": "Summary."}}]}
+                    )
+                )
+
+                with patch(
+                    "app.services.ninerouter.httpx.AsyncClient",
+                    side_effect=[first, second],
+                ) as client_factory:
+                    result = await generate_ninerouter_text(
+                        "prompt", settings, max_output_tokens=512
+                    )
+
+                self.assertEqual(result, "Summary.")
+                self.assertEqual(
+                    client_factory.call_args_list,
+                    [call(timeout=12), call(timeout=12)],
+                )
+                self.assertEqual(
+                    [
+                        first.post.await_args.kwargs["json"]["model"],
+                        second.post.await_args.kwargs["json"]["model"],
+                    ],
+                    ["summary-primary", "summary-fallback"],
+                )
+
+    async def test_retries_network_and_malformed_summary_responses(self) -> None:
+        failures = (
+            _AsyncClientStub(error=httpx.TimeoutException("router timed out")),
+            _AsyncClientStub(error=httpx.ConnectError("router unavailable")),
+            _AsyncClientStub(result=_response(content=b"not-json")),
+            _AsyncClientStub(result=_response(payload={})),
+            _AsyncClientStub(
+                result=_response(
+                    payload={"choices": [{"message": {"content": "  "}}]}
+                )
+            ),
+        )
+        for first in failures:
+            with self.subTest(first=first):
+                settings = AiSettings(
+                    NINEROUTER_URL="http://router",
+                    NINEROUTER_SUMMARY_MODEL="summary-primary,summary-fallback",
+                )
+                second = _AsyncClientStub(
+                    result=_response(
+                        payload={"choices": [{"message": {"content": "Summary."}}]}
+                    )
+                )
+
+                with patch(
+                    "app.services.ninerouter.httpx.AsyncClient",
+                    side_effect=[first, second],
+                ):
+                    result = await generate_ninerouter_text(
+                        "prompt", settings, max_output_tokens=512
+                    )
+
+                self.assertEqual(result, "Summary.")
+                self.assertEqual(first.post.await_count, 1)
+                self.assertEqual(second.post.await_count, 1)
+
+    async def test_fails_fast_on_nonretryable_summary_http_status(self) -> None:
+        for status_code in (302, 400):
+            with self.subTest(status_code=status_code):
+                settings = AiSettings(
+                    NINEROUTER_URL="http://router",
+                    NINEROUTER_SUMMARY_MODEL="summary-primary,summary-fallback",
+                )
+                first = _AsyncClientStub(
+                    result=_response(
+                        status_code=status_code,
+                        payload={"error": {"message": "invalid request"}},
+                    )
+                )
+                second = _AsyncClientStub(
+                    result=_response(
+                        payload={"choices": [{"message": {"content": "Summary."}}]}
+                    )
+                )
+
+                with patch(
+                    "app.services.ninerouter.httpx.AsyncClient",
+                    side_effect=[first, second],
+                ) as client_factory:
+                    with self.assertRaises(NineRouterSummaryError) as raised:
+                        await generate_ninerouter_text(
+                            "prompt", settings, max_output_tokens=512
+                        )
+
+                self.assertEqual(client_factory.call_count, 1)
+                self.assertNotIn("invalid request", str(raised.exception))
+
+    async def test_summary_exhaustion_hides_upstream_error_body(self) -> None:
+        settings = AiSettings(
+            NINEROUTER_URL="http://router",
+            NINEROUTER_SUMMARY_MODEL="summary-primary,summary-fallback",
+        )
+        clients = [
+            _AsyncClientStub(
+                result=_response(
+                    status_code=503,
+                    payload={"error": {"message": "sensitive upstream detail"}},
+                )
+            )
+            for _ in range(2)
+        ]
+
+        with patch(
+            "app.services.ninerouter.httpx.AsyncClient", side_effect=clients
+        ):
+            with self.assertRaises(NineRouterSummaryError) as raised:
+                await generate_ninerouter_text(
+                    "prompt", settings, max_output_tokens=512
+                )
+
+        self.assertNotIn("sensitive upstream detail", str(raised.exception))
+
     async def test_rejects_malformed_or_empty_chat_completion_content(self) -> None:
         invalid_responses = (
             _response(content=b"not-json"),
@@ -233,6 +366,38 @@ class NineRouterChatAdapterTests(unittest.IsolatedAsyncioTestCase):
                 ):
                     with self.assertRaises(NineRouterChatError):
                         await generate_ninerouter_chat_text("prompt", self.settings)
+
+    async def test_retries_chat_with_next_configured_model(self) -> None:
+        settings = AiSettings(
+            NINEROUTER_URL="http://router",
+            NINEROUTER_CHAT_MODEL="chat-primary, chat-fallback",
+            NINEROUTER_CHAT_TIMEOUT_SECONDS=24,
+        )
+        first = _AsyncClientStub(
+            result=_response(status_code=503, payload={"error": "unavailable"})
+        )
+        second = _AsyncClientStub(
+            result=_response(payload={"choices": [{"message": {"content": "Answer."}}]})
+        )
+
+        with patch(
+            "app.services.ninerouter.httpx.AsyncClient",
+            side_effect=[first, second],
+        ) as client_factory:
+            result = await generate_ninerouter_chat_text("prompt", settings)
+
+        self.assertEqual(result, "Answer.")
+        self.assertEqual(
+            client_factory.call_args_list,
+            [call(timeout=12), call(timeout=12)],
+        )
+        self.assertEqual(
+            [
+                first.post.await_args.kwargs["json"]["model"],
+                second.post.await_args.kwargs["json"]["model"],
+            ],
+            ["chat-primary", "chat-fallback"],
+        )
 
     async def test_rejects_malformed_or_empty_chat_completion_content(self) -> None:
         invalid_responses = (

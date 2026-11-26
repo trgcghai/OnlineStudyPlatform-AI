@@ -10,6 +10,7 @@ from app.services.ninerouter import (
     generate_ninerouter_chat_text,
     generate_ninerouter_text,
 )
+from app.services.summarization import SummarizationError, validate_summary
 
 
 class _AsyncClientStub:
@@ -268,6 +269,64 @@ class NineRouterSummaryAdapterTests(unittest.IsolatedAsyncioTestCase):
                 )
 
         self.assertNotIn("sensitive upstream detail", str(raised.exception))
+
+    async def test_retries_final_summary_when_structure_validation_fails(self) -> None:
+        settings = AiSettings(
+            NINEROUTER_URL="http://router",
+            NINEROUTER_SUMMARY_MODEL="summary-primary,summary-fallback",
+        )
+        valid_summary = """## Tổng quan
+
+Giới thiệu chủ đề bài học.
+
+## Nội dung chính
+
+- Nêu một khái niệm quan trọng.
+
+## Kết luận và ghi nhớ
+
+Ghi nhớ nội dung chính."""
+        clients = [
+            _AsyncClientStub(
+                result=_response(
+                    payload={"choices": [{"message": {"content": "Invalid."}}]}
+                )
+            ),
+            _AsyncClientStub(
+                result=_response(
+                    payload={
+                        "choices": [{"message": {"content": valid_summary}}]
+                    }
+                )
+            ),
+        ]
+
+        def validate_candidate(content: str) -> str:
+            try:
+                return validate_summary(content, "Nguồn transcript khác.")
+            except SummarizationError as error:
+                raise NineRouterSummaryError(
+                    "9Router returned invalid summary structure"
+                ) from error
+
+        with patch(
+            "app.services.ninerouter.httpx.AsyncClient", side_effect=clients
+        ):
+            result = await generate_ninerouter_text(
+                "prompt",
+                settings,
+                max_output_tokens=512,
+                validator=validate_candidate,
+            )
+
+        self.assertEqual(result, valid_summary)
+        self.assertEqual(
+            [
+                client.post.await_args.kwargs["json"]["model"]
+                for client in clients
+            ],
+            ["summary-primary", "summary-fallback"],
+        )
 
     async def test_rejects_malformed_or_empty_chat_completion_content(self) -> None:
         invalid_responses = (

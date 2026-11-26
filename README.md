@@ -13,17 +13,32 @@ tại trong pipeline và được gửi đến `POST /summarize`; transcript kh�
 làm nội dung tóm tắt.
 
 `POST /summarize` gửi transcript đến chat-completions API của 9Router, sử dụng
-model cấu hình qua `NINEROUTER_SUMMARY_MODEL`. Mỗi lời gọi có timeout riêng được
-cấu hình qua `NINEROUTER_SUMMARY_TIMEOUT_SECONDS` (mặc định 120 giây). Nội dung
-được biên tập thành tiếng Việt với ba phần `Tổng quan`, `Nội dung chính`,
-`Kết luận và ghi nhớ`. Lỗi từ 9Router hoặc kết quả thiếu cấu trúc sẽ trả lỗi để
-BullMQ retry; dịch vụ không rơi về việc cắt ghép câu transcript.
+`NINEROUTER_SUMMARY_MODEL`, hỗ trợ danh sách model phân tách bằng dấu phẩy và
+thử lần lượt từ trái sang phải, ví dụ `model-primary,model-fallback`. Timeout
+`NINEROUTER_SUMMARY_TIMEOUT_SECONDS` (mặc định 120 giây) là tổng ngân sách cho
+mỗi lời gọi 9Router và được chia đều cho các model đã cấu hình. Dịch vụ chuyển
+sang model tiếp theo ngay khi nhận HTTP 5xx hoặc 429; lỗi mạng, timeout, JSON/
+phản hồi không hợp lệ, nội dung rỗng hoặc bản tóm tắt thiếu cấu trúc bắt buộc
+cũng kích hoạt fallback. Các HTTP 4xx khác dừng ngay vì thường là lỗi xác thực
+hoặc cấu hình chung. Nội dung được biên tập thành tiếng Việt với ba phần
+`Tổng quan`, `Nội dung chính`, `Kết luận và ghi nhớ`. Nếu mọi model đều lỗi,
+endpoint trả lỗi để BullMQ retry; dịch vụ không rơi về việc cắt ghép câu
+transcript.
 
 Chat RAG truy xuất các đoạn nội dung của khóa học từ Qdrant, sau đó gửi câu hỏi
 cùng ngữ cảnh và lịch sử liên quan đến chat-completions API của 9Router để tạo
-câu trả lời. Cấu hình model qua `NINEROUTER_CHAT_MODEL` và timeout qua
-`NINEROUTER_CHAT_TIMEOUT_SECONDS` (mặc định 120 giây); luồng chat dùng chung
-`NINEROUTER_URL` và `NINEROUTER_API_KEY` với các tính năng 9Router khác.
+câu trả lời. `NINEROUTER_CHAT_MODEL` nhận danh sách model phân tách bằng dấu
+phẩy và thử theo thứ tự. Timeout `NINEROUTER_CHAT_TIMEOUT_SECONDS` (mặc định
+120 giây) là ngân sách tổng cho mỗi yêu cầu, chia đều giữa các model. HTTP 5xx/
+429, lỗi mạng/timeout và phản hồi không sử dụng được sẽ thử model tiếp theo;
+các HTTP 4xx khác dừng ngay. Luồng chat dùng chung `NINEROUTER_URL` và
+`NINEROUTER_API_KEY` với các tính năng 9Router khác.
+
+Phiên âm dùng `NINEROUTER_STT_MODEL` theo cùng định dạng danh sách có thứ tự.
+`NINEROUTER_TIMEOUT_SECONDS` (mặc định 1500 giây) là ngân sách tổng cho mỗi
+yêu cầu phiên âm, chia đều giữa các model. Lỗi 5xx/429, mạng/timeout hoặc
+transcript rỗng/không hợp lệ sẽ chuyển sang model kế tiếp; các HTTP 4xx khác
+dừng ngay.
 
 Ví dụ yêu cầu phiên âm:
 

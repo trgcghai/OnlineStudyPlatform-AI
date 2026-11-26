@@ -1,4 +1,5 @@
 import re
+from collections.abc import Callable
 from dataclasses import dataclass
 
 from app.core.config import AiSettings
@@ -180,12 +181,26 @@ def validate_summary(summary: str, transcript: str) -> str:
     return validated
 
 
-async def _generate_summary_text(prompt: str, settings: AiSettings) -> str:
+def _validate_summary_candidate(summary: str, transcript: str) -> str:
+    try:
+        return validate_summary(summary, transcript)
+    except SummarizationError as error:
+        raise NineRouterSummaryError(
+            "9Router returned invalid summary structure"
+        ) from error
+
+
+async def _generate_summary_text(
+    prompt: str,
+    settings: AiSettings,
+    validator: Callable[[str], str] | None = None,
+) -> str:
     try:
         return await generate_ninerouter_text(
             prompt,
             settings,
             max_output_tokens=settings.summary_max_output_tokens,
+            validator=validator,
         )
     except NineRouterSummaryError as error:
         raise SummarizationError("9Router could not generate a summary") from error
@@ -208,6 +223,9 @@ async def summarize_with_ninerouter(
                 "NGUON_BAI_GIANG",
             ),
             settings,
+            validator=lambda summary: _validate_summary_candidate(
+                summary, transcript
+            ),
         )
     else:
         notes: list[str] = []
@@ -227,11 +245,14 @@ async def summarize_with_ninerouter(
                 "GHI_CHU_DA_TRICH_XUAT",
             ),
             settings,
+            validator=lambda summary: _validate_summary_candidate(
+                summary, transcript
+            ),
         )
 
     if not generated:
         raise SummarizationError("9Router could not generate a summary")
-    return validate_summary(generated, transcript)
+    return generated
 
 
 async def summarize_transcript(
